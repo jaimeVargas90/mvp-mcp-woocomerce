@@ -1,7 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+// 🔴 CAMBIO 1: Importamos el transporte correcto (Streamable) en lugar de SSE
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import pkg from "@woocommerce/woocommerce-rest-api";
 
@@ -50,10 +51,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   let clientData;
   try {
     const clients = JSON.parse(clientsEnv);
-
-    // TODO: Obtener clientId del contexto de la petición
-    // Por ahora, usamos el primer cliente
-    // En el futuro, buscar por clientId: clients.find(c => c.clientId === requestClientId)
+    // Por ahora usamos el primero (MVP)
     clientData = clients[0];
 
     if (!clientData) {
@@ -88,24 +86,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// 🔴 CAMBIO 2: Endpoint unificado con StreamableHTTPServerTransport
+// Usamos app.all para que acepte tanto GET (conexión) como POST (mensajes)
 app.use("/mcp", async (req, res) => {
-  console.log("📨 Petición MCP recibida");
+  console.log(`📨 Petición MCP recibida (${req.method})`);
 
-  // Extraer el clientId del header
+  // Extraer el clientId del header (opcional por ahora, pero útil logs)
   const clientId = req.headers['x-client-id'] as string;
-  console.log("🔑 Client ID:", clientId);
+  if (clientId) console.log("🔑 Client ID:", clientId);
 
-  const transport = new SSEServerTransport("/message", res);
+  // Creamos el transporte que maneja todo en la misma ruta
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
 
-  // Pasar el clientId al contexto del servidor (lo usaremos en los handlers)
-  (transport as any).clientId = clientId;
-
-  // Limpieza vital para evitar fugas de memoria
+  // Limpieza vital
   res.on("close", () => {
     transport.close();
   });
 
+  // Conectar y delegar la petición al SDK
   await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
 });
 
 app.listen(PORT, () => {
