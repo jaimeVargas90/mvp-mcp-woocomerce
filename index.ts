@@ -50,7 +50,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   let clientData;
   try {
     const clients = JSON.parse(clientsEnv);
+
+    // TODO: Obtener clientId del contexto de la petición
+    // Por ahora, usamos el primer cliente
+    // En el futuro, buscar por clientId: clients.find(c => c.clientId === requestClientId)
     clientData = clients[0];
+
+    if (!clientData) {
+      return { content: [{ type: "text", text: "No se encontró configuración de cliente" }] };
+    }
   } catch (e) {
     return { content: [{ type: "text", text: "JSON CLIENTS inválido" }] };
   }
@@ -82,7 +90,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 app.use("/mcp", async (req, res) => {
   console.log("📨 Petición MCP recibida");
+
+  // Extraer el clientId del header
+  const clientId = req.headers['x-client-id'] as string;
+  console.log("🔑 Client ID:", clientId);
+
   const transport = new SSEServerTransport("/message", res);
+
+  // Pasar el clientId al contexto del servidor (lo usaremos en los handlers)
+  (transport as any).clientId = clientId;
 
   // Limpieza vital para evitar fugas de memoria
   res.on("close", () => {
