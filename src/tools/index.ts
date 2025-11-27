@@ -1,8 +1,8 @@
 import { listWooProductsTool } from "./list-products.tool.js";
-// Aquí importarías más herramientas:
-// import { createOrderTool } from "./create-order.tool.js";
+import { searchWooProductsTool } from "./search-products.tool.js"; // 👈 Importar
+import { WooTool } from "../types.js";
 
-export const ALL_TOOLS = [
+export const tools: WooTool[] = [
   listWooProductsTool,
-  // createOrderTool,
+  searchWooProductsTool, // 👈 Agregar a la lista
 ];
