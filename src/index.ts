@@ -30,6 +30,12 @@ const PORT = process.env.PORT || 3000;
 // Esto permite que entren peticiones GET (para SSE/Meteor) y POST (para 5ire)
 app.use("/mcp", async (req, res) => {
   console.log(`📨 Petición MCP entrante (${req.method})`);
+  console.log("Headers:", JSON.stringify(req.headers, null, 2));
+
+  // FORCE ACCEPT HEADER FOR GET REQUESTS (uchat fix)
+  if (req.method === "GET") {
+    req.headers["accept"] = "text/event-stream";
+  }
 
   const clientId = req.headers["x-client-id"] as string;
 
@@ -107,9 +113,10 @@ app.use("/mcp", async (req, res) => {
   });
 
   // 5. Conectar transporte (Soporta SSE y POST automáticamente)
+  // 5. Conectar transporte (Soporta SSE y POST automáticamente)
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
-    enableJsonResponse: true,
+    enableJsonResponse: req.method === "POST",
   });
 
   res.on("close", () => {
