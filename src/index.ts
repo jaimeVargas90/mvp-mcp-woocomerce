@@ -17,6 +17,31 @@ const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
+// ==================================================================
+// 🔥 OPTIMIZACIÓN DE RENDIMIENTO (CACHÉ DE CLIENTES)
+// ==================================================================
+// Cargamos y parseamos los clientes UNA SOLA VEZ al iniciar el servidor.
+// Esto evita hacer JSON.parse() miles de veces y reduce la carga de CPU.
+
+let CLIENTS_CACHE: any[] = [];
+
+try {
+  const envClients = process.env.CLIENTS || "[]";
+  CLIENTS_CACHE = JSON.parse(envClients);
+
+  if (CLIENTS_CACHE.length > 0) {
+    console.log(`✅ Configuración cargada exitosamente: ${CLIENTS_CACHE.length} clientes en memoria.`);
+  } else {
+    console.warn("⚠️ ALERTA: La lista de clientes está vacía (Variable CLIENTS=[] o vacía).");
+  }
+
+} catch (error) {
+  console.error("❌ ERROR CRÍTICO AL INICIAR:");
+  console.error("La variable de entorno CLIENTS no contiene un JSON válido.");
+  console.error("El servidor se detendrá para evitar fallos en tiempo de ejecución.");
+  process.exit(1); // Es mejor que el servidor no arranque a que arranque roto
+}
+
 // ------------------------------------------------------------------
 // ENDPOINT MAESTRO MCP (Maneja la lógica Multi-Cliente)
 // ------------------------------------------------------------------
@@ -31,22 +56,12 @@ app.use("/mcp", async (req, res) => {
     return res.status(400).send("Falta el header X-Client-ID");
   }
 
-  // 2. BÚSQUEDA: Encontrar configuración del cliente
-  const clientsEnv = process.env.CLIENTS;
-  if (!clientsEnv) {
-    return res.status(500).send("Error de configuración del servidor");
-  }
-
-  let clientData;
-  try {
-    const clients = JSON.parse(clientsEnv);
-    clientData = clients.find((c: any) => c.clientId === clientId);
-  } catch (e) {
-    return res.status(500).send("Error interno de configuración");
-  }
+  // 2. BÚSQUEDA OPTIMIZADA: Buscar en la memoria caché
+  // Esto es una operación casi instantánea, sin importar cuántos clientes tengas.
+  const clientData = CLIENTS_CACHE.find((c: any) => c.clientId === clientId);
 
   if (!clientData) {
-    console.warn(`⚠️ Cliente no encontrado: ${clientId}`);
+    console.warn(`⚠️ Cliente no encontrado o no autorizado: ${clientId}`);
     return res.status(404).send(`Cliente no configurado: ${clientId}`);
   }
 
@@ -121,5 +136,5 @@ app.use("/mcp", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor Multi-Cliente corriendo en puerto ${PORT}`);
+  console.log(`🚀 Servidor Multi-Cliente Optimizado corriendo en puerto ${PORT}`);
 });
