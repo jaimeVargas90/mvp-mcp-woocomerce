@@ -7,9 +7,7 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import pkg from "@woocommerce/woocommerce-rest-api";
-import { zodToJsonSchema } from "zod-to-json-schema"; // Nueva importación
-
-// Importamos tus herramientas desde la carpeta organizada
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { tools } from "./tools/index.js";
 
 // Ajuste para importar la librería de Woo en entornos ESM/TypeScript
@@ -33,7 +31,7 @@ app.use("/mcp", async (req, res) => {
     return res.status(400).send("Falta el header X-Client-ID");
   }
 
-  // 2. BÚSQUEDA: Encontrar las credenciales
+  // 2. BÚSQUEDA: Encontrar configuración del cliente
   const clientsEnv = process.env.CLIENTS;
   if (!clientsEnv) {
     return res.status(500).send("Error de configuración del servidor");
@@ -52,7 +50,7 @@ app.use("/mcp", async (req, res) => {
     return res.status(404).send(`Cliente no configurado: ${clientId}`);
   }
 
-  // 3. INSTANCIACIÓN: Crear servidor efímero
+  // 3. INSTANCIACIÓN: Crear servidor efímero para esta petición
   const server = new Server(
     {
       name: "woo-mcp-multiclient",
@@ -66,14 +64,12 @@ app.use("/mcp", async (req, res) => {
   );
 
   // 4. DEFINICIÓN DE HERRAMIENTAS DINÁMICA
-  // En lugar de escribir una por una, iteramos sobre tu array de 'tools'
 
   // -- Handler para listar herramientas --
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    // Convertimos tus herramientas al formato que MCP espera
     const mcpTools = tools.map((tool) => ({
       name: tool.name,
-      // Concatenamos la URL de la tienda para mantener la info visual que tenías antes
+      // Concatenamos la URL para visibilidad en el cliente MCP
       description: `${tool.description} (Tienda: ${clientData.storeUrl})`,
       inputSchema: zodToJsonSchema(tool.inputSchema),
     }));
@@ -85,7 +81,6 @@ app.use("/mcp", async (req, res) => {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
-    // Buscamos si tenemos la herramienta en nuestra carpeta
     const tool = tools.find((t) => t.name === name);
 
     if (!tool) {
@@ -101,8 +96,6 @@ app.use("/mcp", async (req, res) => {
     });
 
     try {
-      // Ejecutamos la lógica que está aislada en tu archivo .tool.ts
-      // Pasamos la instancia de API ya configurada
       return await tool.handler(api, args);
     } catch (error: any) {
       console.error(`Error ejecutando herramienta ${name}:`, error.message);
