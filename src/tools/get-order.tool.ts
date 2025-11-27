@@ -23,6 +23,8 @@ export const getOrderTool: WooTool = {
                 date_created: order.date_created,
                 payment_method: order.payment_method_title,
                 customer: `${order.billing.first_name} ${order.billing.last_name}`,
+                // 🔥 Agregado: Confirmar dirección ayuda mucho en soporte
+                shipping_address: `${order.shipping.address_1}, ${order.shipping.city}`,
                 line_items: order.line_items.map((item: any) => ({
                     product: item.name,
                     quantity: item.quantity,
