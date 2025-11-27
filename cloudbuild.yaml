@@ -1,5 +1,8 @@
-# cloudbuild.yaml (CORREGIDO)
-# ... (líneas 1 a 10)
+steps:
+  # ... (Primeros dos pasos: Build y Push) ...
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'run'
@@ -12,7 +15,8 @@
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
-      # 👇 DEBES AÑADIR ESTAS DOS LÍNEAS 👇
+      # NUEVAS LÍNEAS - Asegúrate que tienen dos espacios antes del guion (-)
       - '--set-secrets'
-      - 'CLIENTS=WOO_CLIENTS_CONFIG:latest' # Nombre de la variable = Nombre del Secreto : última versión
-# ... (líneas 22 a 24)
+      - 'CLIENTS=WOO_CLIENTS_CONFIG:latest' 
+images:
+  - 'gcr.io/$PROJECT_ID/woo-mcp-mvp'
