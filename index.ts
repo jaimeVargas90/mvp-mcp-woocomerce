@@ -1,116 +1,136 @@
 import "dotenv/config";
 import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-// 🔴 CAMBIO 1: Importamos el transporte correcto (Streamable) en lugar de SSE
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import pkg from "@woocommerce/woocommerce-rest-api";
 
+// Ajuste para importar la librería de Woo en entornos ESM/TypeScript
 const WooCommerceRestApi = (pkg as any).default || pkg;
 
 const app = express();
-app.use(express.json());
+app.use(express.json()); // Necesario para leer JSON bodies
 const PORT = process.env.PORT || 3000;
 
-const server = new Server({
-  name: "woo-mcp-mvp",
-  version: "1.0.0",
-}, {
-  capabilities: {
-    tools: {},
-  },
-});
+// ------------------------------------------------------------------
+// ENDPOINT MAESTRO MCP (Maneja la lógica Multi-Cliente)
+// ------------------------------------------------------------------
+app.use("/mcp", async (req, res) => {
+  console.log(`📨 Petición MCP entrante (${req.method})`);
 
-// Handler para listar las herramientas disponibles
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "listWooProducts",
-      description: "Lista 5 productos de WooCommerce",
-      inputSchema: {
-        type: "object",
-        properties: {},
-      },
-    },
-  ],
-}));
+  // 1. VALIDACIÓN: Obtener el ID del cliente del header
+  const clientId = req.headers['x-client-id'] as string;
 
-// Handler para ejecutar herramientas
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name } = request.params;
-
-  if (name !== "listWooProducts") {
-    throw new Error(`Herramienta desconocida: ${name}`);
+  if (!clientId) {
+    console.error("❌ Error: Falta el header X-Client-ID");
+    return res.status(400).send("Falta el header X-Client-ID");
   }
 
+  console.log(`🔑 Autenticando Client ID: ${clientId}`);
+
+  // 2. BÚSQUEDA: Encontrar las credenciales en la variable de entorno
   const clientsEnv = process.env.CLIENTS;
   if (!clientsEnv) {
-    return { content: [{ type: "text", text: "Falta variable CLIENTS" }] };
+    console.error("❌ Error CRÍTICO: No hay variable CLIENTS en Railway");
+    return res.status(500).send("Error de configuración del servidor");
   }
 
   let clientData;
   try {
     const clients = JSON.parse(clientsEnv);
-    // Por ahora usamos el primero (MVP)
-    clientData = clients[0];
-
-    if (!clientData) {
-      return { content: [{ type: "text", text: "No se encontró configuración de cliente" }] };
-    }
+    // 🔥 CAMBIO CLAVE: Buscamos la tienda exacta por su ID
+    clientData = clients.find((c: any) => c.clientId === clientId);
   } catch (e) {
-    return { content: [{ type: "text", text: "JSON CLIENTS inválido" }] };
+    console.error("❌ Error parseando JSON de CLIENTS");
+    return res.status(500).send("Error interno de configuración");
   }
 
-  const api = new WooCommerceRestApi({
-    url: clientData.storeUrl,
-    consumerKey: clientData.consumerKey,
-    consumerSecret: clientData.consumerSecret,
-    version: "wc/v3",
+  if (!clientData) {
+    console.warn(`⚠️ Cliente no encontrado: ${clientId}`);
+    return res.status(404).send(`Cliente no configurado: ${clientId}`);
+  }
+
+  // 3. INSTANCIACIÓN: Crear un servidor efímero para ESTA petición específica
+  const server = new Server({
+    name: "woo-mcp-multiclient",
+    version: "1.0.0",
+  }, {
+    capabilities: {
+      tools: {},
+    },
   });
 
-  try {
-    const response = await api.get("products", { per_page: 5 });
-    const products = response.data.map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      price: p.price,
-    }));
+  // 4. DEFINICIÓN DE HERRAMIENTAS (Usando el clientData encontrado)
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(products, null, 2) }],
-    };
-  } catch (error: any) {
-    return {
-      content: [{ type: "text", text: `Error Woo: ${error.message}` }],
-    };
-  }
-});
+  // -- Handler para listar herramientas --
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: "listWooProducts",
+        description: `Lista 5 productos de WooCommerce (Tienda: ${clientData.storeUrl})`,
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+    ],
+  }));
 
-// 🔴 CAMBIO 2: Endpoint unificado con StreamableHTTPServerTransport
-// Usamos app.all para que acepte tanto GET (conexión) como POST (mensajes)
-app.use("/mcp", async (req, res) => {
-  console.log(`📨 Petición MCP recibida (${req.method})`);
+  // -- Handler para ejecutar herramientas --
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name } = request.params;
 
-  // Extraer el clientId del header (opcional por ahora, pero útil logs)
-  const clientId = req.headers['x-client-id'] as string;
-  if (clientId) console.log("🔑 Client ID:", clientId);
+    if (name === "listWooProducts") {
+      // Inicializamos Woo con las credenciales ESPECÍFICAS de este cliente
+      const api = new WooCommerceRestApi({
+        url: clientData.storeUrl,
+        consumerKey: clientData.consumerKey,
+        consumerSecret: clientData.consumerSecret,
+        version: "wc/v3",
+      });
 
-  // Creamos el transporte que maneja todo en la misma ruta
+      try {
+        console.log(`ZEjecutando listWooProducts para ${clientData.storeUrl}...`);
+        const response = await api.get("products", { per_page: 5 });
+
+        const products = response.data.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          price: p.price,
+          permalink: p.permalink
+        }));
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(products, null, 2) }]
+        };
+      } catch (error: any) {
+        console.error("Error en API Woo:", error.response?.data || error.message);
+        return {
+          content: [{ type: "text", text: `Error Woo: ${error.message}` }],
+          isError: true
+        };
+      }
+    }
+
+    throw new Error(`Herramienta desconocida: ${name}`);
+  });
+
+  // 5. CONEXIÓN Y TRANSPORTE
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
 
-  // Limpieza vital
+  // Limpieza de recursos al cerrar la conexión
   res.on("close", () => {
     transport.close();
   });
 
-  // Conectar y delegar la petición al SDK
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
 
+// Arrancar el servidor Express
 app.listen(PORT, () => {
-  console.log(`🚀 MVP corriendo en puerto ${PORT}`);
+  console.log(`🚀 Servidor Multi-Cliente corriendo en puerto ${PORT}`);
 });
