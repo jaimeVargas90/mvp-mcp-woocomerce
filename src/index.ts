@@ -7,50 +7,52 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import pkg from "@woocommerce/woocommerce-rest-api";
+
 // Ajuste para importar la librería de Woo en entornos ESM/TypeScript
 const WooCommerceRestApi = (pkg as any).default || pkg;
+
 const app = express();
 app.use(express.json()); // Necesario para leer JSON bodies
 const PORT = process.env.PORT || 3000;
+
 // ------------------------------------------------------------------
 // ENDPOINT MAESTRO MCP (Maneja la lógica Multi-Cliente)
 // ------------------------------------------------------------------
 app.use("/mcp", async (req, res) => {
-  console.log(`:correo_entrante: Petición MCP entrante (${req.method})`);
+  console.log(`📨 Petición MCP entrante (${req.method})`);
+
   // 1. VALIDACIÓN: Obtener el ID del cliente del header
   const clientId = req.headers["x-client-id"] as string;
+
   if (!clientId) {
-    console.error(":x: Error: Falta el header X-Client-ID");
+    console.error("❌ Error: Falta el header X-Client-ID");
     return res.status(400).send("Falta el header X-Client-ID");
   }
-  console.log(`:llave: Autenticando Client ID: ${clientId}`);
+
+  console.log(`🔑 Autenticando Client ID: ${clientId}`);
+
   // 2. BÚSQUEDA: Encontrar las credenciales en la variable de entorno
   const clientsEnv = process.env.CLIENTS;
   if (!clientsEnv) {
-    console.error(":x: Error CRÍTICO: No hay variable CLIENTS en Railway");
+    console.error("❌ Error CRÍTICO: No hay variable CLIENTS en Railway");
     return res.status(500).send("Error de configuración del servidor");
   }
+
   let clientData;
   try {
     const clients = JSON.parse(clientsEnv);
-    // :apuntando_hacia_abajo::apuntando_hacia_abajo: AGREGA ESTAS 2 LÍNEAS PARA DEPURAR :apuntando_hacia_abajo::apuntando_hacia_abajo:
-    const availableIds = clients.map((c: any) => c.clientId);
-    console.log(
-      `:portapapeles: Clientes cargados en memoria: ${JSON.stringify(
-        availableIds
-      )}`
-    );
-    // :apuntando_hacia_arriba_2::apuntando_hacia_arriba_2: FIN DEL DEBUG :apuntando_hacia_arriba_2::apuntando_hacia_arriba_2:
-    // :fuego: CAMBIO CLAVE: Buscamos la tienda exacta por su ID
+    // 🔥 CAMBIO CLAVE: Buscamos la tienda exacta por su ID
     clientData = clients.find((c: any) => c.clientId === clientId);
   } catch (e) {
-    console.error(":x: Error parseando JSON de CLIENTS");
+    console.error("❌ Error parseando JSON de CLIENTS");
     return res.status(500).send("Error interno de configuración");
   }
+
   if (!clientData) {
-    console.warn(`:advertencia: Cliente no encontrado: ${clientId}`);
+    console.warn(`⚠️ Cliente no encontrado: ${clientId}`);
     return res.status(404).send(`Cliente no configurado: ${clientId}`);
   }
+
   // 3. INSTANCIACIÓN: Crear un servidor efímero para ESTA petición específica
   const server = new Server(
     {
@@ -63,7 +65,9 @@ app.use("/mcp", async (req, res) => {
       },
     }
   );
+
   // 4. DEFINICIÓN DE HERRAMIENTAS (Usando el clientData encontrado)
+
   // -- Handler para listar herramientas --
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
@@ -77,9 +81,11 @@ app.use("/mcp", async (req, res) => {
       },
     ],
   }));
+
   // -- Handler para ejecutar herramientas --
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name } = request.params;
+
     if (name === "listWooProducts") {
       // Inicializamos Woo con las credenciales ESPECÍFICAS de este cliente
       const api = new WooCommerceRestApi({
@@ -88,17 +94,20 @@ app.use("/mcp", async (req, res) => {
         consumerSecret: clientData.consumerSecret,
         version: "wc/v3",
       });
+
       try {
         console.log(
           `ZEjecutando listWooProducts para ${clientData.storeUrl}...`
         );
         const response = await api.get("products", { per_page: 5 });
+
         const products = response.data.map((p: any) => ({
           id: p.id,
           name: p.name,
           price: p.price,
           permalink: p.permalink,
         }));
+
         return {
           content: [{ type: "text", text: JSON.stringify(products, null, 2) }],
         };
@@ -113,21 +122,26 @@ app.use("/mcp", async (req, res) => {
         };
       }
     }
+
     throw new Error(`Herramienta desconocida: ${name}`);
   });
+
   // 5. CONEXIÓN Y TRANSPORTE
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
+
   // Limpieza de recursos al cerrar la conexión
   res.on("close", () => {
     transport.close();
   });
+
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
+
 // Arrancar el servidor Express
 app.listen(PORT, () => {
-  console.log(`:cohete: Servidor Multi-Cliente corriendo en puerto ${PORT}`);
+  console.log(`🚀 Servidor Multi-Cliente corriendo en puerto ${PORT}`);
 });
