@@ -98,6 +98,7 @@ app.use("/mcp", async (req, res) => {
       consumerKey: clientData.consumerKey,
       consumerSecret: clientData.consumerSecret,
       version: "wc/v3",
+      queryStringAuth: true,
       // 👇 DISFRAZ MEJORADO: Cabeceras para simular un navegador real 👇
       axiosConfig: {
         headers: {

@@ -39,9 +39,8 @@ export const searchWooProductsTool: WooTool = {
                 page: args.page,
                 order: order,
                 orderby: orderBy,
-                // 🔥 MODIFICACIÓN CLAVE PARA TUS PRUEBAS:
                 status: "publish",
-                stock_status: "instock",   // 2. "instock" asegura que solo traiga los que tienen inventario (>0).
+                stock_status: "instock",
             };
 
             if (args.keyword && args.keyword.trim() !== "") {
@@ -66,7 +65,7 @@ export const searchWooProductsTool: WooTool = {
                 return {
                     id: p.id,
                     name: p.name,
-                    status: p.status, // Dejamos visible el status para que sepas si es borrador
+                    status: p.status,
                     type: p.type,
                     price: parseFloat(p.price),
                     regular_price: parseFloat(p.regular_price),
@@ -96,7 +95,7 @@ export const searchWooProductsTool: WooTool = {
                         keyword: args.keyword || "TODOS",
                         min_price: args.minPrice,
                         max_price: args.maxPrice,
-                        status_mode: "any_with_stock" // Flag informativo
+                        status_mode: "any_with_stock"
                     }
                 },
                 products: products
