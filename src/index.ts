@@ -1,6 +1,5 @@
 import "dotenv/config";
 import express from "express";
-import cors from "cors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -8,80 +7,51 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import pkg from "@woocommerce/woocommerce-rest-api";
-import { ALL_TOOLS } from "./tools/index.js";
-
+// Ajuste para importar la librería de Woo en entornos ESM/TypeScript
 const WooCommerceRestApi = (pkg as any).default || pkg;
-
 const app = express();
-
-// 1. Configuración de CORS
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "OPTIONS"], // Permitimos GET para SSE
-    allowedHeaders: ["Content-Type", "X-Client-ID"],
-  })
-);
-
-app.use(express.json());
+app.use(express.json()); // Necesario para leer JSON bodies
 const PORT = process.env.PORT || 3000;
-
-// 🔴 CAMBIO CRÍTICO: Usamos app.use en lugar de app.post
-// Esto permite que entren peticiones GET (para SSE/Meteor) y POST (para 5ire)
+// ------------------------------------------------------------------
+// ENDPOINT MAESTRO MCP (Maneja la lógica Multi-Cliente)
+// ------------------------------------------------------------------
 app.use("/mcp", async (req, res) => {
-  console.log(`📨 Petición MCP entrante (${req.method})`);
-  console.log("Headers:", JSON.stringify(req.headers, null, 2));
-
-  // FORCE ACCEPT HEADER FOR GET REQUESTS (uchat fix)
-  if (req.method === "GET") {
-    req.headers["accept"] = "text/event-stream";
-  }
-
+  console.log(`:correo_entrante: Petición MCP entrante (${req.method})`);
+  // 1. VALIDACIÓN: Obtener el ID del cliente del header
   const clientId = req.headers["x-client-id"] as string;
-
   if (!clientId) {
-    return res.status(400).json({
-      error: "Falta el header X-Client-ID",
-      details:
-        "Asegúrate de enviar el header 'X-Client-ID' con el ID de tu tienda.",
-    });
+    console.error(":x: Error: Falta el header X-Client-ID");
+    return res.status(400).send("Falta el header X-Client-ID");
   }
-
+  console.log(`:llave: Autenticando Client ID: ${clientId}`);
+  // 2. BÚSQUEDA: Encontrar las credenciales en la variable de entorno
   const clientsEnv = process.env.CLIENTS;
   if (!clientsEnv) {
-    return res
-      .status(500)
-      .json({ error: "Error interno: Variable CLIENTS no configurada" });
+    console.error(":x: Error CRÍTICO: No hay variable CLIENTS en Railway");
+    return res.status(500).send("Error de configuración del servidor");
   }
-
   let clientData;
   try {
     const clients = JSON.parse(clientsEnv);
+    // :apuntando_hacia_abajo::apuntando_hacia_abajo: AGREGA ESTAS 2 LÍNEAS PARA DEPURAR :apuntando_hacia_abajo::apuntando_hacia_abajo:
+    const availableIds = clients.map((c: any) => c.clientId);
+    console.log(
+      `:portapapeles: Clientes cargados en memoria: ${JSON.stringify(
+        availableIds
+      )}`
+    );
+    // :apuntando_hacia_arriba_2::apuntando_hacia_arriba_2: FIN DEL DEBUG :apuntando_hacia_arriba_2::apuntando_hacia_arriba_2:
+    // :fuego: CAMBIO CLAVE: Buscamos la tienda exacta por su ID
     clientData = clients.find((c: any) => c.clientId === clientId);
   } catch (e) {
-    return res
-      .status(500)
-      .json({ error: "Error interno: JSON de clientes inválido" });
+    console.error(":x: Error parseando JSON de CLIENTS");
+    return res.status(500).send("Error interno de configuración");
   }
-
   if (!clientData) {
-    console.warn(`⚠️ Cliente no encontrado: ${clientId}`);
-    return res
-      .status(404)
-      .json({ error: `Cliente no encontrado: ${clientId}` });
+    console.warn(`:advertencia: Cliente no encontrado: ${clientId}`);
+    return res.status(404).send(`Cliente no configurado: ${clientId}`);
   }
-
-  console.log(`🔑 Cliente autenticado: ${clientId}`);
-
-  // 3. Inicializar API Woo
-  const wooApi = new WooCommerceRestApi({
-    url: clientData.storeUrl,
-    consumerKey: clientData.consumerKey,
-    consumerSecret: clientData.consumerSecret,
-    version: "wc/v3",
-  });
-
-  // 4. Crear servidor MCP efímero
+  // 3. INSTANCIACIÓN: Crear un servidor efímero para ESTA petición específica
   const server = new Server(
     {
       name: "woo-mcp-multiclient",
@@ -93,45 +63,71 @@ app.use("/mcp", async (req, res) => {
       },
     }
   );
-
+  // 4. DEFINICIÓN DE HERRAMIENTAS (Usando el clientData encontrado)
+  // -- Handler para listar herramientas --
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: ALL_TOOLS.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema as any,
-    })),
+    tools: [
+      {
+        name: "listWooProducts",
+        description: `Lista 5 productos de WooCommerce (Tienda: ${clientData.storeUrl})`,
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+    ],
   }));
-
+  // -- Handler para ejecutar herramientas --
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const toolName = request.params.name;
-    const tool = ALL_TOOLS.find((t) => t.name === toolName);
-
-    if (!tool) {
-      throw new Error(`Herramienta desconocida: ${toolName}`);
+    const { name } = request.params;
+    if (name === "listWooProducts") {
+      // Inicializamos Woo con las credenciales ESPECÍFICAS de este cliente
+      const api = new WooCommerceRestApi({
+        url: clientData.storeUrl,
+        consumerKey: clientData.consumerKey,
+        consumerSecret: clientData.consumerSecret,
+        version: "wc/v3",
+      });
+      try {
+        console.log(
+          `ZEjecutando listWooProducts para ${clientData.storeUrl}...`
+        );
+        const response = await api.get("products", { per_page: 5 });
+        const products = response.data.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          price: p.price,
+          permalink: p.permalink,
+        }));
+        return {
+          content: [{ type: "text", text: JSON.stringify(products, null, 2) }],
+        };
+      } catch (error: any) {
+        console.error(
+          "Error en API Woo:",
+          error.response?.data || error.message
+        );
+        return {
+          content: [{ type: "text", text: `Error Woo: ${error.message}` }],
+          isError: true,
+        };
+      }
     }
-    return await tool.handler(wooApi, request.params.arguments);
+    throw new Error(`Herramienta desconocida: ${name}`);
   });
-
-  // 5. Conectar transporte (Soporta SSE y POST automáticamente)
-  // 5. Conectar transporte (Soporta SSE y POST automáticamente)
+  // 5. CONEXIÓN Y TRANSPORTE
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
-    enableJsonResponse: req.method === "POST",
+    enableJsonResponse: true,
   });
-
+  // Limpieza de recursos al cerrar la conexión
   res.on("close", () => {
     transport.close();
   });
-
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
-
-// Health check en raíz (opcional)
-app.get("/", (req, res) => {
-  res.json({ status: "ok", message: "WooCommerce MCP Server Running" });
-});
-
+// Arrancar el servidor Express
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor WooCommerce MCP corriendo en puerto ${PORT}`);
+  console.log(`:cohete: Servidor Multi-Cliente corriendo en puerto ${PORT}`);
 });
