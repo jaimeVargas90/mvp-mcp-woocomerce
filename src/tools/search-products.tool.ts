@@ -12,13 +12,13 @@ export const searchWooProductsTool: WooTool = {
         minPrice: z.coerce.number().optional().describe("Precio mínimo (opcional)"),
         maxPrice: z.coerce.number().optional().describe("Precio máximo (opcional)"),
         sort: z.enum(["relevance", "price_asc", "price_desc", "newest"])
-            .default("newest") // 🔥 Cambio: Por defecto "lo nuevo" es mejor que relevancia si no hay keyword
+            .default("newest")
             .describe("Orden de los resultados"),
     }),
 
     handler: async (api, args) => {
         try {
-            let orderBy = "date"; // Default: Novedades
+            let orderBy = "date";
             let order = "desc";
 
             switch (args.sort) {
@@ -28,7 +28,6 @@ export const searchWooProductsTool: WooTool = {
                 case "newest": orderBy = "date"; order = "desc"; break;
             }
 
-            // Si no hay keyword, no podemos ordenar por relevancia (dará error Woo), forzamos fecha
             if (!args.keyword && orderBy === "relevance") {
                 orderBy = "date";
             }
@@ -40,11 +39,11 @@ export const searchWooProductsTool: WooTool = {
                 page: args.page,
                 order: order,
                 orderby: orderBy,
-                status: "publish",
-                stock_status: "instock",
+                // 🔥 MODIFICACIÓN CLAVE PARA TUS PRUEBAS:
+                status: "any",             // 1. "any" permite ver 'draft', 'private' y 'publish'.
+                stock_status: "instock",   // 2. "instock" asegura que solo traiga los que tienen inventario (>0).
             };
 
-            // Solo agregamos 'search' si la keyword existe y no está vacía
             if (args.keyword && args.keyword.trim() !== "") {
                 params.search = args.keyword;
             }
@@ -67,6 +66,7 @@ export const searchWooProductsTool: WooTool = {
                 return {
                     id: p.id,
                     name: p.name,
+                    status: p.status, // Dejamos visible el status para que sepas si es borrador
                     type: p.type,
                     price: parseFloat(p.price),
                     regular_price: parseFloat(p.regular_price),
@@ -82,7 +82,7 @@ export const searchWooProductsTool: WooTool = {
 
             if (products.length === 0) {
                 return {
-                    content: [{ type: "text", text: `No encontré productos con esos criterios.` }],
+                    content: [{ type: "text", text: `No encontré productos con esos criterios (incluso buscando en borradores).` }],
                 };
             }
 
@@ -95,7 +95,8 @@ export const searchWooProductsTool: WooTool = {
                     filters: {
                         keyword: args.keyword || "TODOS",
                         min_price: args.minPrice,
-                        max_price: args.maxPrice
+                        max_price: args.maxPrice,
+                        status_mode: "any_with_stock" // Flag informativo
                     }
                 },
                 products: products
