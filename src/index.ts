@@ -90,18 +90,23 @@ app.use("/mcp", async (req, res) => {
       throw new Error(`Herramienta desconocida: ${name}`);
     }
 
-    // Inicializamos Woo con el "Disfraz" de User-Agent
+    // Inicializamos Woo con "Modo Sigilo Total" para evadir Firewalls (403)
     const api = new WooCommerceRestApi({
       url: clientData.storeUrl,
       consumerKey: clientData.consumerKey,
       consumerSecret: clientData.consumerSecret,
       version: "wc/v3",
-      // 👇 AQUÍ ESTÁ EL TRUCO 👇
+      // 👇 DISFRAZ MEJORADO 👇
       axiosConfig: {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Content-Type": "application/json",
-          "Accept": "application/json"
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+          "Cache-Control": "max-age=0",
+          "Connection": "keep-alive",
+          "Referer": clientData.storeUrl, // Simulamos venir de la misma tienda
+          "Upgrade-Insecure-Requests": "1"
         }
       }
     });
@@ -109,15 +114,25 @@ app.use("/mcp", async (req, res) => {
     try {
       return await tool.handler(api, args);
     } catch (error: any) {
-      // Log más detallado para debug
-      console.error(`Error ejecutando herramienta ${name}:`, error.message);
+      // Log detallado para diagnosticar el bloqueo 403
+      console.error(`🚨 Error CRÍTICO ejecutando ${name}:`, error.message);
+
       if (error.response) {
-        console.error("Status:", error.response.status);
-        console.error("Data:", JSON.stringify(error.response.data));
+        console.error("🔴 Status Code:", error.response.status);
+        console.error("🔴 Headers:", JSON.stringify(error.response.headers));
+
+        // Intentamos mostrar el cuerpo de la respuesta (puede contener "Wordfence Blocked")
+        const errorData = error.response.data;
+        if (typeof errorData === 'object') {
+          console.error("🔴 Data (JSON):", JSON.stringify(errorData));
+        } else {
+          // Si es HTML (común en bloqueos de firewall), mostramos los primeros 200 caracteres
+          console.error("🔴 Data (HTML/Text):", errorData.toString().substring(0, 300));
+        }
       }
 
       return {
-        content: [{ type: "text", text: `Error Interno: ${error.message}` }],
+        content: [{ type: "text", text: `Error de Conexión con Tienda: ${error.message}. (Ver logs del servidor para detalles del bloqueo)` }],
         isError: true,
       };
     }
