@@ -40,7 +40,7 @@ export const searchWooProductsTool: WooTool = {
                 order: order,
                 orderby: orderBy,
                 // 🔥 MODIFICACIÓN CLAVE PARA TUS PRUEBAS:
-                status: "any",             // 1. "any" permite ver 'draft', 'private' y 'publish'.
+                status: "publish",
                 stock_status: "instock",   // 2. "instock" asegura que solo traiga los que tienen inventario (>0).
             };
 
