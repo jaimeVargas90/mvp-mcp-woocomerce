@@ -1,6 +1,6 @@
 import "dotenv/config";
 import express from "express";
-import cors from "cors"; // Necesitas instalarlo: npm install cors
+import cors from "cors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -14,11 +14,11 @@ const WooCommerceRestApi = (pkg as any).default || pkg;
 
 const app = express();
 
-// 1. Configuración de CORS (Igual que Shopify pero explícito)
+// 1. Configuración de CORS
 app.use(
   cors({
     origin: "*",
-    methods: ["GET", "POST", "OPTIONS"],
+    methods: ["GET", "POST", "OPTIONS"], // Permitimos GET para SSE
     allowedHeaders: ["Content-Type", "X-Client-ID"],
   })
 );
@@ -26,9 +26,10 @@ app.use(
 app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
-// 2. Ruta POST específica (Igual que en tu server.ts de Shopify)
-app.post("/mcp", async (req, res) => {
-  console.log(`📨 Petición MCP entrante (POST)`);
+// 🔴 CAMBIO CRÍTICO: Usamos app.use en lugar de app.post
+// Esto permite que entren peticiones GET (para SSE/Meteor) y POST (para 5ire)
+app.use("/mcp", async (req, res) => {
+  console.log(`📨 Petición MCP entrante (${req.method})`);
 
   const clientId = req.headers["x-client-id"] as string;
 
@@ -87,7 +88,6 @@ app.post("/mcp", async (req, res) => {
     }
   );
 
-  // Registrar herramientas
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: ALL_TOOLS.map((tool) => ({
       name: tool.name,
@@ -96,7 +96,6 @@ app.post("/mcp", async (req, res) => {
     })),
   }));
 
-  // Ejecutar herramientas
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
     const tool = ALL_TOOLS.find((t) => t.name === toolName);
@@ -107,7 +106,7 @@ app.post("/mcp", async (req, res) => {
     return await tool.handler(wooApi, request.params.arguments);
   });
 
-  // 5. Conectar transporte (Igual que Shopify)
+  // 5. Conectar transporte (Soporta SSE y POST automáticamente)
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -121,12 +120,9 @@ app.post("/mcp", async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-// 6. Ruta GET para verificación (Health Check)
-app.get("/mcp", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "MCP Server is running. Use POST to interact.",
-  });
+// Health check en raíz (opcional)
+app.get("/", (req, res) => {
+  res.json({ status: "ok", message: "WooCommerce MCP Server Running" });
 });
 
 app.listen(PORT, () => {
