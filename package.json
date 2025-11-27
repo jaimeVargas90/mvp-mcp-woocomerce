@@ -4,9 +4,9 @@
   "description": "",
   "main": "index.ts",
   "type": "module",
-  "scripts": {
-    "start": "tsx index.ts",
-    "dev": "tsx watch index.ts"
+"scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.1",
