@@ -18,30 +18,37 @@ export const searchWooProductsTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            let orderBy = "date";
-            let order = "desc";
+            let orderBy: string | undefined = "date";
+            let order: string | undefined = "desc";
 
             switch (args.sort) {
                 case "price_asc": orderBy = "price"; order = "asc"; break;
                 case "price_desc": orderBy = "price"; order = "desc"; break;
-                case "relevance": orderBy = "relevance"; order = "desc"; break;
+                case "relevance":
+                    // Si hay búsqueda, dejamos undefined para que Woo use su default (relevancia)
+                    // Si NO hay búsqueda, ordenamos por fecha
+                    if (args.keyword) {
+                        orderBy = undefined;
+                        order = undefined;
+                    } else {
+                        orderBy = "date";
+                        order = "desc";
+                    }
+                    break;
                 case "newest": orderBy = "date"; order = "desc"; break;
             }
 
-            if (!args.keyword && orderBy === "relevance") {
-                orderBy = "date";
-            }
-
-            console.log(`🔍 Query: "${args.keyword || 'TODO'}" | Pág: ${args.page} | Orden: ${orderBy}`);
+            console.log(`🔍 Query: "${args.keyword || 'TODO'}" | Pág: ${args.page} | Orden: ${orderBy || 'AUTO (Relevance)'}`);
 
             const params: any = {
                 per_page: args.limit,
                 page: args.page,
-                order: order,
-                orderby: orderBy,
                 status: "publish",
                 stock_status: "instock",
             };
+
+            if (orderBy) params.orderby = orderBy;
+            if (order) params.order = order;
 
             if (args.keyword && args.keyword.trim() !== "") {
                 params.search = args.keyword;
