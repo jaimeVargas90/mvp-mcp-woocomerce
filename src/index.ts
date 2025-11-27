@@ -1,6 +1,6 @@
 import "dotenv/config";
 import express from "express";
-import cors from "cors"; // <--- NUEVO IMPORT
+import cors from "cors"; // Necesitas instalarlo: npm install cors
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -14,40 +14,37 @@ const WooCommerceRestApi = (pkg as any).default || pkg;
 
 const app = express();
 
-// 1. Configuración de CORS (Vital para Meteor/Web)
+// 1. Configuración de CORS (Igual que Shopify pero explícito)
 app.use(
   cors({
-    origin: "*", // Permite acceso desde cualquier lugar (Meteor, UChat, etc.)
+    origin: "*",
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "X-Client-ID"], // Permitimos tu header personalizado
+    allowedHeaders: ["Content-Type", "X-Client-ID"],
   })
 );
 
 app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
-app.use("/mcp", async (req, res) => {
-  console.log(`📨 Petición MCP entrante (${req.method})`);
+// 2. Ruta POST específica (Igual que en tu server.ts de Shopify)
+app.post("/mcp", async (req, res) => {
+  console.log(`📨 Petición MCP entrante (POST)`);
 
-  // 2. Validación de Headers (Respondiendo siempre con JSON)
   const clientId = req.headers["x-client-id"] as string;
 
   if (!clientId) {
-    console.error("❌ Falta header X-Client-ID");
     return res.status(400).json({
       error: "Falta el header X-Client-ID",
       details:
-        "Asegurate de enviar el header 'X-Client-ID' con el ID de tu tienda.",
+        "Asegúrate de enviar el header 'X-Client-ID' con el ID de tu tienda.",
     });
   }
 
-  // 3. Carga de Credenciales
   const clientsEnv = process.env.CLIENTS;
   if (!clientsEnv) {
-    console.error("❌ Error CRÍTICO: No hay variable CLIENTS");
     return res
       .status(500)
-      .json({ error: "Error interno de configuración del servidor" });
+      .json({ error: "Error interno: Variable CLIENTS no configurada" });
   }
 
   let clientData;
@@ -57,24 +54,19 @@ app.use("/mcp", async (req, res) => {
   } catch (e) {
     return res
       .status(500)
-      .json({ error: "Error interno: Formato JSON de clientes inválido" });
+      .json({ error: "Error interno: JSON de clientes inválido" });
   }
 
   if (!clientData) {
     console.warn(`⚠️ Cliente no encontrado: ${clientId}`);
-    // Tip: Imprimimos los IDs disponibles en los logs para que puedas depurar si te equivocas de nuevo
-    const available = JSON.parse(clientsEnv).map((c: any) => c.clientId);
-    console.log(`ℹ️ IDs Disponibles: ${available.join(", ")}`);
-
-    return res.status(404).json({
-      error: "Cliente no encontrado",
-      clientIdProvided: clientId,
-    });
+    return res
+      .status(404)
+      .json({ error: `Cliente no encontrado: ${clientId}` });
   }
 
-  console.log(`🔑 Cliente autenticado: ${clientId} (${clientData.storeUrl})`);
+  console.log(`🔑 Cliente autenticado: ${clientId}`);
 
-  // 4. Inicialización de API WooCommerce
+  // 3. Inicializar API Woo
   const wooApi = new WooCommerceRestApi({
     url: clientData.storeUrl,
     consumerKey: clientData.consumerKey,
@@ -82,7 +74,7 @@ app.use("/mcp", async (req, res) => {
     version: "wc/v3",
   });
 
-  // 5. Configuración del Servidor MCP
+  // 4. Crear servidor MCP efímero
   const server = new Server(
     {
       name: "woo-mcp-multiclient",
@@ -95,7 +87,7 @@ app.use("/mcp", async (req, res) => {
     }
   );
 
-  // --- REGISTRO DE HERRAMIENTAS ---
+  // Registrar herramientas
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: ALL_TOOLS.map((tool) => ({
       name: tool.name,
@@ -104,7 +96,7 @@ app.use("/mcp", async (req, res) => {
     })),
   }));
 
-  // --- EJECUCIÓN DE HERRAMIENTAS ---
+  // Ejecutar herramientas
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = request.params.name;
     const tool = ALL_TOOLS.find((t) => t.name === toolName);
@@ -112,12 +104,10 @@ app.use("/mcp", async (req, res) => {
     if (!tool) {
       throw new Error(`Herramienta desconocida: ${toolName}`);
     }
-
-    // Ejecutamos el handler pasando la API ya configurada
     return await tool.handler(wooApi, request.params.arguments);
   });
 
-  // 6. Conexión y Transporte
+  // 5. Conectar transporte (Igual que Shopify)
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -131,6 +121,14 @@ app.use("/mcp", async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
+// 6. Ruta GET para verificación (Health Check)
+app.get("/mcp", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "MCP Server is running. Use POST to interact.",
+  });
+});
+
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor Modular + CORS corriendo en puerto ${PORT}`);
+  console.log(`🚀 Servidor WooCommerce MCP corriendo en puerto ${PORT}`);
 });
