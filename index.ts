@@ -38,6 +38,12 @@ app.use("/mcp", async (req, res) => {
   let clientData;
   try {
     const clients = JSON.parse(clientsEnv);
+
+    // 👇👇 AGREGA ESTAS 2 LÍNEAS PARA DEPURAR 👇👇
+    const availableIds = clients.map((c: any) => c.clientId);
+    console.log(`📋 Clientes cargados en memoria: ${JSON.stringify(availableIds)}`);
+    // 👆👆 FIN DEL DEBUG 👆👆
+
     // 🔥 CAMBIO CLAVE: Buscamos la tienda exacta por su ID
     clientData = clients.find((c: any) => c.clientId === clientId);
   } catch (e) {
