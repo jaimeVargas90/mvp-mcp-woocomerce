@@ -10,7 +10,7 @@ import pkg from "@woocommerce/woocommerce-rest-api";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { tools } from "./tools/index.js";
 
-// Ajuste para importar la librería de Woo en entornos ESM/TypeScript
+// Adjust to import WooCommerce library in ESM/TypeScript environments
 const WooCommerceRestApi = (pkg as any).default || pkg;
 
 const app = express();
@@ -18,7 +18,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 // ==================================================================
-// 🔥 OPTIMIZACIÓN DE RENDIMIENTO (CACHÉ DE CLIENTES)
+// Performance Optimization: Client Cache
 // ==================================================================
 let CLIENTS_CACHE: any[] = [];
 
@@ -27,36 +27,36 @@ try {
   CLIENTS_CACHE = JSON.parse(envClients);
 
   if (CLIENTS_CACHE.length > 0) {
-    console.log(`✅ Configuración cargada exitosamente: ${CLIENTS_CACHE.length} clientes en memoria.`);
+    console.log(`✅ Configuration loaded successfully: ${CLIENTS_CACHE.length} clients in memory.`);
   } else {
-    console.warn("⚠️ ALERTA: La lista de clientes está vacía (Variable CLIENTS=[] o vacía).");
+    console.warn("⚠️ WARNING: Client list is empty (CLIENTS=[] or empty).");
   }
 
 } catch (error) {
-  console.error("❌ ERROR CRÍTICO AL INICIAR:");
-  console.error("La variable de entorno CLIENTS no contiene un JSON válido.");
+  console.error("❌ CRITICAL ERROR ON STARTUP:");
+  console.error("The CLIENTS environment variable does not contain valid JSON.");
   process.exit(1);
 }
 
 // ------------------------------------------------------------------
-// ENDPOINT MAESTRO MCP
+// MCP Master Endpoint
 // ------------------------------------------------------------------
 app.use("/mcp", async (req, res) => {
-  console.log(`📨 Petición MCP entrante (${req.method})`);
+  console.log(`📨 Incoming MCP Request (${req.method})`);
 
   const clientId = req.headers["x-client-id"] as string;
 
   if (!clientId) {
-    console.error("❌ Error: Falta el header X-Client-ID");
-    return res.status(400).send("Falta el header X-Client-ID");
+    console.error("❌ Error: Missing X-Client-ID header");
+    return res.status(400).send("Missing X-Client-ID header");
   }
 
-  // Búsqueda optimizada en memoria
+  // Optimized in-memory search
   const clientData = CLIENTS_CACHE.find((c: any) => c.clientId === clientId);
 
   if (!clientData) {
-    console.warn(`⚠️ Cliente no encontrado o no autorizado: ${clientId}`);
-    return res.status(404).send(`Cliente no configurado: ${clientId}`);
+    console.warn(`⚠️ Client not found or unauthorized: ${clientId}`);
+    return res.status(404).send(`Client not configured: ${clientId}`);
   }
 
   const server = new Server(
@@ -71,35 +71,35 @@ app.use("/mcp", async (req, res) => {
     }
   );
 
-  // -- Handler para listar herramientas --
+  // -- Handler to list tools --
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const mcpTools = tools.map((tool) => ({
       name: tool.name,
-      description: `${tool.description} (Tienda: ${clientData.storeUrl})`,
+      description: `${tool.description} (Store: ${clientData.storeUrl})`,
       inputSchema: zodToJsonSchema(tool.inputSchema),
     }));
 
     return { tools: mcpTools };
   });
 
-  // -- Handler para ejecutar herramientas --
+  // -- Handler to execute tools --
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
     const tool = tools.find((t) => t.name === name);
 
     if (!tool) {
-      throw new Error(`Herramienta desconocida: ${name}`);
+      throw new Error(`Unknown tool: ${name}`);
     }
 
-    // Inicializamos Woo con "Modo Sigilo Total" para evadir Firewalls (403)
+    // Initialize Woo with "Stealth Mode" to evade Firewalls (403)
     const api = new WooCommerceRestApi({
       url: clientData.storeUrl,
       consumerKey: clientData.consumerKey,
       consumerSecret: clientData.consumerSecret,
       version: "wc/v3",
       queryStringAuth: true,
-      // 👇 DISFRAZ MEJORADO: Cabeceras para simular un navegador real 👇
+      // Improved Disguise: Headers to simulate a real browser
       axiosConfig: {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -108,36 +108,36 @@ app.use("/mcp", async (req, res) => {
           "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
           "Cache-Control": "max-age=0",
           "Connection": "keep-alive",
-          "Referer": clientData.storeUrl, // Simulamos venir de la misma tienda (Self-Referer)
+          "Referer": clientData.storeUrl, // Simulate coming from the same store (Self-Referer)
           "Upgrade-Insecure-Requests": "1"
         }
       }
     });
 
     try {
-      // Ejecutamos la lógica de la herramienta
+      // Execute tool logic
       return await tool.handler(api, args);
 
     } catch (error: any) {
-      // Log detallado para diagnosticar bloqueos
-      console.error(`🚨 Error CRÍTICO ejecutando ${name}:`, error.message);
+      // Detailed log to diagnose blocks
+      console.error(`🚨 CRITICAL Error executing ${name}:`, error.message);
 
       if (error.response) {
         console.error("🔴 Status Code:", error.response.status);
         console.error("🔴 Headers:", JSON.stringify(error.response.headers));
 
-        // Intentamos mostrar datos útiles del error
+        // Try to show useful error data
         const errorData = error.response.data;
         if (typeof errorData === 'object') {
           console.error("🔴 Data (JSON):", JSON.stringify(errorData));
         } else {
-          // Si es HTML (común en WAFs), mostramos un fragmento
+          // If HTML (common in WAFs), show a fragment
           console.error("🔴 Data (HTML/Text):", errorData ? errorData.toString().substring(0, 300) : "No data");
         }
       }
 
       return {
-        content: [{ type: "text", text: `Error de Conexión con Tienda: ${error.message}. (Ver logs del servidor)` }],
+        content: [{ type: "text", text: `Store Connection Error: ${error.message}. (See server logs)` }],
         isError: true,
       };
     }
@@ -148,7 +148,7 @@ app.use("/mcp", async (req, res) => {
     enableJsonResponse: true,
   });
 
-  // Limpieza de recursos al cerrar la conexión
+  // Clean up resources on connection close
   res.on("close", () => {
     transport.close();
   });
@@ -158,5 +158,5 @@ app.use("/mcp", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor Multi-Cliente Optimizado corriendo en puerto ${PORT}`);
+  console.log(`🚀 Multi-Client Server running on port ${PORT}`);
 });

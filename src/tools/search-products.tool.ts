@@ -42,7 +42,7 @@ export const searchWooProductsTool: WooTool = {
                 case "newest": orderBy = "date"; order = "desc"; break;
             }
 
-            console.log(`🔍 Buscando: "${args.keyword || 'TODO'}" | Cat: ${args.category || 'N/A'} | Stock: ${args.stockStatus}`);
+            console.log(`🔍 Searching: "${args.keyword || 'ALL'}" | Cat: ${args.category || 'N/A'} | Stock: ${args.stockStatus}`);
 
             const params: any = {
                 per_page: args.limit,
@@ -59,8 +59,8 @@ export const searchWooProductsTool: WooTool = {
             if (args.maxPrice) params.max_price = args.maxPrice;
             if (args.onSale) params.on_sale = true;
 
-            // Lógica crítica: Si es "all", NO enviamos stock_status (Woo muestra todo por defecto)
-            // Si es "instock" u otro, sí lo filtramos.
+            // Critical logic: If "all", do NOT send stock_status (Woo shows all by default)
+            // If "instock" or other, filter it.
             if (args.stockStatus !== 'all') {
                 params.stock_status = args.stockStatus;
             }
@@ -120,7 +120,7 @@ export const searchWooProductsTool: WooTool = {
             };
 
         } catch (error: any) {
-            console.error("Error en searchWooProducts:", error.message);
+            console.error("Error in searchWooProducts:", error.message);
             return {
                 content: [{ type: "text", text: `Error Woo: ${error.message}` }],
                 isError: true,

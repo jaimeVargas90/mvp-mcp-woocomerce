@@ -6,7 +6,7 @@ export const createOrderTool: WooTool = {
     description: "Crea un pedido en WooCommerce. Soporta múltiples productos (carrito), selección de envío y cupones. Pago por defecto: Contra Reembolso.",
 
     inputSchema: z.object({
-        // 🔥 CAMBIO 1: Ahora recibimos un ARRAY de productos, no uno solo.
+        // CHANGE 1: Now receiving an ARRAY of products, not just one.
         items: z.array(z.object({
             productId: z.coerce.number().describe("ID del producto"),
             quantity: z.coerce.number().min(1).default(1).describe("Cantidad"),
@@ -18,7 +18,7 @@ export const createOrderTool: WooTool = {
         email: z.string().email().describe("Email para notificaciones"),
         phone: z.string().optional().describe("Teléfono"),
 
-        // Dirección
+        // Address
         address: z.string().describe("Calle y número"),
         city: z.string().describe("Ciudad"),
         state: z.string().optional().describe("Departamento/Estado (Código ISO si es posible, ej: CUN)"),
@@ -26,18 +26,18 @@ export const createOrderTool: WooTool = {
 
         note: z.string().optional().describe("Nota del cliente"),
 
-        // 🔥 CAMBIO 2: Soporte para método de envío (ID obtenido de getShippingMethods)
+        // CHANGE 2: Support for shipping method (ID obtained from getShippingMethods)
         shippingMethodId: z.string().optional().describe("ID del método de envío (ej: 'flat_rate:1'). Si se omite, Woo intentará asignar uno por defecto."),
 
-        // 🔥 CAMBIO 3: Cupones
+        // CHANGE 3: Coupons
         couponCode: z.string().optional().describe("Código de cupón a aplicar")
     }),
 
     handler: async (api, args) => {
         try {
-            console.log(`🛒 Creando pedido Multi-Item para ${args.email} | Items: ${args.items.length}`);
+            console.log(`🛒 Creating Multi-Item order for ${args.email} | Items: ${args.items.length}`);
 
-            // 1. Mapeamos los items al formato de Woo
+            // 1. Map items to Woo format
             const lineItems = args.items.map(item => {
                 const line: any = {
                     product_id: item.productId,
@@ -47,20 +47,20 @@ export const createOrderTool: WooTool = {
                 return line;
             });
 
-            // 2. Configuramos líneas de envío (si se envió el ID)
+            // 2. Configure shipping lines (if ID was sent)
             const shippingLines = args.shippingMethodId ? [
                 {
                     method_id: args.shippingMethodId,
-                    method_title: "Envío Seleccionado" // Woo recalculará el título real al crear
+                    method_title: "Envío Seleccionado" // Woo will recalculate the real title on creation
                 }
             ] : [];
 
-            // 3. Configuramos cupones
+            // 3. Configure coupons
             const couponLines = args.couponCode ? [
                 { code: args.couponCode }
             ] : [];
 
-            // 4. Construimos el payload completo
+            // 4. Build full payload
             const data = {
                 payment_method: "cod",
                 payment_method_title: "Pago contra reembolso",
@@ -92,7 +92,7 @@ export const createOrderTool: WooTool = {
             const response = await api.post("orders", data);
             const order = response.data;
 
-            // 5. Respuesta enriquecida
+            // 5. Enriched response
             const resultData = {
                 success: true,
                 order_id: order.id,
@@ -100,7 +100,7 @@ export const createOrderTool: WooTool = {
                 currency: order.currency,
                 total: order.total,
                 shipping_total: order.shipping_total,
-                discount_total: order.discount_total, // Para confirmar si el cupón funcionó
+                discount_total: order.discount_total, // To confirm if coupon worked
                 items_count: order.line_items.length,
                 payment_method: order.payment_method_title,
                 message: "Pedido creado exitosamente. Se ha enviado un correo al cliente."
@@ -112,7 +112,7 @@ export const createOrderTool: WooTool = {
 
         } catch (error: any) {
             const wooError = error.response?.data?.message;
-            console.error("Error creando pedido:", wooError || error.message);
+            console.error("Error creating order:", wooError || error.message);
 
             return {
                 content: [{ type: "text", text: `Error al crear pedido: ${wooError || error.message}` }],

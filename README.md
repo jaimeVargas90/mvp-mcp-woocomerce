@@ -1,161 +1,150 @@
-🚀 MCP WooCommerce Multi-Tenant Server
+# 🚀 MCP WooCommerce Multi-Tenant Server
 
-Un servidor Model Context Protocol (MCP) diseñado para dotar a chatbots de Inteligencia Artificial (UChat, 5ire, Claude, etc.) de capacidades completas de E-commerce, soportando múltiples tiendas simultáneamente.
+A Model Context Protocol (MCP) server designed to empower AI chatbots (UChat, 5ire, Claude, etc.) with complete E-commerce capabilities, supporting multiple stores simultaneously.
 
-📖 Descripción
+## 📖 Description
 
-Este proyecto actúa como un "puente inteligente" entre tus asistentes de IA y WooCommerce. A diferencia de una integración simple, este servidor:
+This project acts as an "intelligent bridge" between your AI assistants and WooCommerce. Unlike a simple integration, this server:
 
-Es Multi-Cliente: Una sola instancia del servidor puede gestionar cientos de tiendas diferentes.
+*   **Multi-Client:** A single server instance can manage hundreds of different stores.
+*   **Contextual:** Tools are designed for the AI to understand context (e.g., if searching for shoes, it returns available sizes; if the user wants to cancel, it changes the order status).
+*   **Secure:** Validates data before sending it to WooCommerce and protects critical actions.
 
-Es Contextual: Las herramientas están diseñadas para que la IA entienda el contexto (ej: si busca zapatos, devuelve tallas disponibles; si el usuario quiere cancelar, cambia el estado del pedido).
+## ✨ Key Features
 
-Es Seguro: Valida datos antes de enviarlos a WooCommerce y protege acciones críticas.
+*   **Multi-Tenant Architecture:** Dynamic store selection via the `x-client-id` header.
+*   **Performance Optimization:** In-memory cache system for client configuration (avoids redundant disk reads).
+*   **Robust Validation:** Uses Zod to ensure the AI sends correct data.
+*   **Clean Responses:** Processes WooCommerce responses (cleans HTML, summarizes data) to save tokens and improve AI comprehension.
 
-✨ Características Clave
+## 🛠️ Tool Catalog
 
-Arquitectura Multi-Tenant: Selección dinámica de tienda mediante el header x-client-id.
+The server exposes the following functions to the AI:
 
-Optimización de Rendimiento: Sistema de caché en memoria para la configuración de clientes (evita lecturas de disco redundantes).
+### 1. 🔍 searchWooProducts (Master Search)
 
-Validación Robusta: Uso de Zod para garantizar que la IA envíe los datos correctos.
+All-in-one tool for product discovery.
 
-Respuestas Limpias: Procesa las respuestas de WooCommerce (limpia HTML, resume datos) para ahorrar tokens y mejorar la comprensión de la IA.
+*   **Functions:** Search by keyword, filter by price range, pagination, and sorting (price, newness, relevance).
+*   **Intelligence:**
+    *   If no search term is provided, it lists the catalog (new arrivals).
+    *   Returns variation IDs and attributes (Size, Color) to facilitate precise selling.
+    *   Cleans HTML from descriptions.
 
-🛠️ Catálogo de Herramientas (Tools)
+### 2. 🛒 createOrder (Sales)
 
-El servidor expone las siguientes funciones a la IA:
+Order generation.
 
-1. 🔍 searchWooProducts (Buscador Maestro)
+*   **Capabilities:**
+    *   Supports simple and variable products (using `variationId`).
+    *   Supports customer notes ("Broken doorbell").
+    *   Sets "Cash on Delivery" payment by default.
+*   **Output:** Returns a structured JSON with order ID, total, and status.
 
-Herramienta todo en uno para descubrimiento de productos.
+### 3. 📦 getOrderStatus (Post-Sale)
 
-Funciones: Buscar por palabra clave, filtrar por rango de precios, paginación y ordenamiento (precio, novedad, relevancia).
+Status query for customer support.
 
-Inteligencia:
+*   **Returned Info:** Current status, total, items, and shipping address (useful for confirming destination).
+*   **Security:** Handles 404 errors gracefully if the user provides an incorrect ID.
 
-Si no recibe búsqueda, lista el catálogo (novedades).
+### 4. 📝 updateOrder (Management)
 
-Devuelve IDs de variaciones y atributos (Talla, Color) para facilitar la venta precisa.
+Order modification and cancellation.
 
-Limpia el HTML de las descripciones.
+*   **Uses:**
+    *   Cancel: Changing status to `cancelled`.
+    *   Correct: Modify address, phone, or email.
+*   **Restrictions:** Does not allow editing orders that are already "Completed" or "Shipped".
 
-2. 🛒 createOrder (Ventas)
+### 5. 🚚 getShippingMethods (Logistics)
 
-Generación de pedidos.
+Shipping cost calculator.
 
-Capacidades:
+*   **Logic:** Receives a country code (e.g., CO, MX), searches for the corresponding Shipping Zone in WooCommerce, and returns available methods and costs.
 
-Soporta productos simples y variables (usando variationId).
+### 6. 🎟️ checkCoupon (Marketing)
 
-Admite notas del cliente ("Timbre dañado").
+Discount validation.
 
-Configura pago "Contra Reembolso" por defecto.
+*   **Functions:** Verifies existence, expiration, and discount amount of a promotional code.
 
-Salida: Devuelve un JSON estructurado con ID de orden, total y estado.
+### 7. 📂 getStoreCategories (Catalog)
 
-3. 📦 getOrderStatus (Post-Venta)
+Category listing.
 
-Consulta de estado para soporte al cliente.
+*   **Functions:** Retrieves the list of product categories from the store.
+*   **Use Case:** Use when the user asks what type of products are sold in general.
 
-Info Devuelta: Estado actual, total, ítems y dirección de envío (útil para confirmar destino).
+## ⚙️ Installation and Configuration
 
-Seguridad: Maneja errores 404 amigablemente si el usuario da un ID incorrecto.
+### 1. Prerequisites
 
-4. 📝 updateOrder (Gestión)
+*   Node.js (v18 or higher)
+*   NPM
+*   One or multiple WooCommerce stores with API Keys generated (Read/Write Permissions).
 
-Modificación y cancelación de pedidos.
+### 2. Environment Variables Configuration
 
-Usos:
+Create a `.env` file in the root. The `CLIENTS` variable must be a JSON String containing the array of stores.
 
-Cancelar: Cambiando el status a cancelled.
-
-Corregir: Modificar dirección, teléfono o email.
-
-Restricciones: No permite editar pedidos que ya están "Completados" o "Enviados".
-
-5. 🚚 getShippingMethods (Logística)
-
-Calculadora de costos de envío.
-
-Lógica: Recibe un código de país (ej: CO, MX), busca la Zona de Envío correspondiente en WooCommerce y devuelve los métodos y costos disponibles.
-
-6. 🎟️ checkCoupon (Marketing)
-
-Validación de descuentos.
-
-Funciones: Verifica existencia, caducidad y monto de descuento de un código promocional.
-
-⚙️ Instalación y Configuración
-
-1. Requisitos Previos
-
-Node.js (v18 o superior)
-
-NPM
-
-Una o varias tiendas WooCommerce con API Keys generadas (Permisos de Lectura/Escritura).
-
-2. Configuración de Variables de Entorno
-
-Crea un archivo .env en la raíz. La variable CLIENTS debe ser un JSON String que contenga el array de tiendas.
-
+```env
 PORT=3000
-# Ejemplo de configuración para 2 clientes
+# Example configuration for 2 clients
 CLIENTS='[
   {
-    "clientId": "cliente_alpha",
-    "storeUrl": "[https://tienda-ropa.com](https://tienda-ropa.com)",
+    "clientId": "client_alpha",
+    "storeUrl": "https://clothing-store.com",
     "consumerKey": "ck_XXXXXXXXXXXXXXXX",
     "consumerSecret": "cs_XXXXXXXXXXXXXXXX"
   },
   {
-    "clientId": "cliente_beta",
-    "storeUrl": "[https://tienda-zapatos.com](https://tienda-zapatos.com)",
+    "clientId": "client_beta",
+    "storeUrl": "https://shoe-store.com",
     "consumerKey": "ck_YYYYYYYYYYYYYYYY",
     "consumerSecret": "cs_YYYYYYYYYYYYYYYY"
   }
 ]'
+```
 
+### 3. Execution
 
-3. Ejecución
-
-# Instalar dependencias
+```bash
+# Install dependencies
 npm install
 
-# Modo Desarrollo (con recarga automática)
+# Development Mode (with auto-reload)
 npm run dev
 
-# Modo Producción
+# Production Mode
 npm start
+```
 
+## 🔌 Integration with UChat / 5ire
 
-🔌 Integración con UChat / 5ire
+To connect your chatbot, configure your HTTP Request or Action as follows:
 
-Para conectar tu chatbot, configura tu HTTP Request o Action de la siguiente manera:
+*   **URL:** `https://your-railway-domain.app/mcp`
+*   **Method:** `POST`
+*   **Headers:**
+    *   `Content-Type`: `application/json`
+    *   `x-client-id`: The ID you configured in the JSON (e.g., `client_alpha`).
 
-URL: https://tu-dominio-railway.app/mcp
+The message body (Body) will be handled automatically by the MCP protocol.
 
-Método: POST
+## 📂 Project Structure
 
-Headers:
-
-Content-Type: application/json
-
-x-client-id: El ID que configuraste en el JSON (ej: cliente_alpha).
-
-El cuerpo del mensaje (Body) será manejado automáticamente por el protocolo MCP.
-
-📂 Estructura del Proyecto
-
+```
 src/
-├── index.ts           # 🧠 Servidor Principal (Express + MCP + Lógica Multi-tenant)
-├── types.ts           # 📄 Definiciones de Tipos (Interfaces TS)
-└── tools/             # 🧰 Carpeta de Herramientas Modulares
-    ├── index.ts             # Registro central de herramientas
-    ├── search-products.tool.ts  # Búsqueda avanzada
-    ├── create-order.tool.ts     # Creación de pedidos
-    ├── get-order.tool.ts        # Consulta de estado
-    ├── update-order.tool.ts     # Edición/Cancelación
-    ├── get-shipping.tool.ts     # Cálculo de envíos
-    └── check-coupon.tool.ts     # Validación de cupones
+├── index.ts           # 🧠 Main Server (Express + MCP + Multi-tenant Logic)
+├── types.ts           # 📄 Type Definitions (TS Interfaces)
+└── tools/             # 🧰 Modular Tools Folder
+    ├── index.ts             # Central tool registration
+    ├── search-products.tool.ts  # Advanced search
+    ├── create-order.tool.ts     # Order creation
+    ├── get-order.tool.ts        # Status query
+    ├── update-order.tool.ts     # Edit/Cancel
+    ├── get-shipping.tool.ts     # Shipping calculation
+    ├── check-coupon.tool.ts     # Coupon validation
+    └── get-categories.tool.ts   # Category listing
+```

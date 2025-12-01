@@ -11,7 +11,7 @@ export const getCategoriesTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            console.log("📂 Consultando categorías...");
+            console.log("Consultando categorías...");
             const response = await api.get("products/categories", {
                 per_page: 20,
                 hide_empty: true,

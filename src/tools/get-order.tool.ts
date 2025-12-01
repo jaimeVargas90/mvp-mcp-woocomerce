@@ -12,25 +12,25 @@ export const getOrderTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            console.log(`📦 Consultando pedido #${args.orderId}`);
+            console.log(`Consultando pedido #${args.orderId}`);
 
             const response = await api.get(`orders/${args.orderId}`);
             const order = response.data;
 
-            // Extraemos el método de envío (suele ser el primero del array)
+            // Extract shipping method (usually the first one in the array)
             const shippingMethod = order.shipping_lines?.[0]?.method_title || "No especificado";
 
-            // Simplificamos la respuesta para la IA
+            // Simplify response for AI
             const orderInfo = {
                 id: order.id,
-                status: order.status, // ej: pending, processing, completed, cancelled
+                status: order.status, // e.g., pending, processing, completed, cancelled
                 currency: order.currency,
                 total: order.total,
                 date_created: order.date_created,
-                date_modified: order.date_modified, // 🔥 Útil para saber cuándo cambió de estado
+                date_modified: order.date_modified, // Useful to know when status changed
                 payment_method: order.payment_method_title,
-                shipping_method: shippingMethod, // 🔥 CRUCIAL: "Envío Express" vs "Recogida"
-                customer_note: order.customer_note || "(Sin notas del cliente)", // 🔥 CRUCIAL: Para confirmar instrucciones
+                shipping_method: shippingMethod, // "Express Shipping" vs "Pickup"
+                customer_note: order.customer_note || "(Sin notas del cliente)", // To confirm instructions
 
                 customer: {
                     name: `${order.billing.first_name} ${order.billing.last_name}`,
@@ -49,7 +49,7 @@ export const getOrderTool: WooTool = {
                     product: item.name,
                     quantity: item.quantity,
                     total: item.total,
-                    // Si tiene variaciones (talla/color), es útil saberlo
+                    // Useful if it has variations (size/color)
                     variation_id: item.variation_id || null
                 }))
             };
@@ -59,7 +59,7 @@ export const getOrderTool: WooTool = {
             };
 
         } catch (error: any) {
-            // Manejo específico si el pedido no existe (404)
+            // Specific handling if order does not exist (404)
             if (error.response && error.response.status === 404) {
                 return {
                     content: [{ type: "text", text: `El pedido #${args.orderId} no existe en esta tienda.` }],
@@ -67,7 +67,7 @@ export const getOrderTool: WooTool = {
                 };
             }
 
-            console.error("Error en getOrder:", error.message);
+            console.error("Error in getOrder:", error.message);
             return {
                 content: [{ type: "text", text: `Error consultando pedido: ${error.message}` }],
                 isError: true,
