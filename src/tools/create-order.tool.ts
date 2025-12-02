@@ -6,12 +6,25 @@ export const createOrderTool: WooTool = {
     description: "Crea un pedido en WooCommerce. Soporta múltiples productos (carrito), selección de envío y cupones. Pago por defecto: Contra Reembolso.",
 
     inputSchema: z.object({
-        // CHANGE 1: Now receiving an ARRAY of products, not just one.
-        items: z.array(z.object({
-            productId: z.coerce.number().describe("ID del producto"),
-            quantity: z.coerce.number().min(1).default(1).describe("Cantidad"),
-            variationId: z.coerce.number().optional().describe("ID de variación (si aplica)")
-        })).describe("Lista de productos a comprar"),
+        // CHANGE 1: Now receiving an ARRAY of products with String-to-JSON preprocessing
+        items: z.preprocess(
+            (val) => {
+                // Si Meteor lo envía como string (texto), lo convertimos a JSON
+                if (typeof val === 'string') {
+                    try {
+                        return JSON.parse(val);
+                    } catch (e) {
+                        return val; // Si falla, lo dejamos pasar para que Zod tire el error normal
+                    }
+                }
+                return val; // Si ya es array (pruebas locales), todo bien
+            },
+            z.array(z.object({
+                productId: z.coerce.number().describe("ID del producto"),
+                quantity: z.coerce.number().min(1).default(1).describe("Cantidad"),
+                variationId: z.coerce.number().optional().describe("ID de variación (si aplica)")
+            }))
+        ).describe("Lista de productos a comprar"),
 
         firstName: z.string().describe("Nombre del cliente"),
         lastName: z.string().describe("Apellido del cliente"),
