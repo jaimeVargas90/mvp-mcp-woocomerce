@@ -59,18 +59,17 @@ export const searchWooProductsTool: WooTool = {
             if (args.maxPrice) params.max_price = args.maxPrice;
             if (args.onSale) params.on_sale = true;
 
-            // Critical logic: If "all", do NOT send stock_status (Woo shows all by default)
-            // If "instock" or other, filter it.
             if (args.stockStatus !== 'all') {
                 params.stock_status = args.stockStatus;
             }
 
             const response = await api.get("products", params);
 
-            const totalProducts = parseInt(response.headers["x-wp-total"] || "0");
+            const totalProductsRaw = parseInt(response.headers["x-wp-total"] || "0");
             const totalPages = parseInt(response.headers["x-wp-totalpages"] || "0");
 
-            const products = response.data.map((p: any) => {
+            // 1. Mapeamos los productos tal cual lo hacías
+            let products = response.data.map((p: any) => {
                 const cleanDesc = p.short_description ? p.short_description.replace(/<[^>]*>?/gm, '') : "";
                 const categoryNames = p.categories.map((c: any) => c.name).join(", ");
 
@@ -94,15 +93,33 @@ export const searchWooProductsTool: WooTool = {
                 };
             });
 
+            // 🔥🔥🔥 AQUI ESTÁ EL FILTRO NUEVO 🔥🔥🔥
+            // Eliminamos "Links de Pago", "Productos de Segunda" y "Sin Categorizar"
+            products = products.filter((p: any) => {
+                const nameLower = p.name.toLowerCase();
+                const catsLower = p.categories.toLowerCase();
+
+                // 1. Excluir si el nombre dice "link de pago"
+                if (nameLower.includes("link de pago")) return false;
+
+                // 2. Excluir si la categoría es de segunda o basura
+                if (catsLower.includes("productos de segunda")) return false;
+                if (catsLower.includes("sin categorizar")) return false;
+
+                return true; // Si pasa los filtros, se queda
+            });
+            // 🔥🔥🔥 FIN DEL FILTRO 🔥🔥🔥
+
+
             if (products.length === 0) {
                 return {
-                    content: [{ type: "text", text: `No encontré productos con esos criterios.` }],
+                    content: [{ type: "text", text: `No encontré productos con esos criterios (se filtraron resultados irrelevantes).` }],
                 };
             }
 
             const resultData = {
                 meta: {
-                    total_results: totalProducts,
+                    total_results: totalProductsRaw, // Nota: Este número es el total bruto de Woo, no refleja el filtro post-búsqueda, pero está bien para paginación.
                     current_page: args.page,
                     total_pages: totalPages,
                     showing: products.length,
