@@ -3,82 +3,75 @@ import { WooTool } from "../types.js";
 
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce. Soporta múltiples productos (carrito), selección de envío y cupones. Pago por defecto: Contra Reembolso.",
+    description: "Crea un pedido en WooCommerce. Soporta 'Pago en Línea' (genera link) y 'Contra Entrega' (sin link).",
 
     inputSchema: z.object({
-        // CHANGE 1: Now receiving an ARRAY of products with String-to-JSON preprocessing
+        // 👇👇👇 NUEVO CAMPO: SELECTOR DE PAGO 👇👇👇
+        paymentMethod: z.enum(["online", "cod"])
+            .describe("Método de pago. Usa 'online' si el cliente quiere pagar ya (Link de pago). Usa 'cod' si el cliente pagará al recibir (Contraentrega)."),
+
+        // ... (El resto de tus campos de productos siguen igual) ...
         items: z.preprocess(
             (val) => {
-                // Si Meteor lo envía como string (texto), lo convertimos a JSON
                 if (typeof val === 'string') {
-                    try {
-                        return JSON.parse(val);
-                    } catch (e) {
-                        return val; // Si falla, lo dejamos pasar para que Zod tire el error normal
-                    }
+                    try { return JSON.parse(val); } catch (e) { return val; }
                 }
-                return val; // Si ya es array (pruebas locales), todo bien
+                return val;
             },
             z.array(z.object({
                 productId: z.coerce.number().describe("ID del producto"),
                 quantity: z.coerce.number().min(1).default(1).describe("Cantidad"),
-                variationId: z.coerce.number().optional().describe("ID de variación (si aplica)")
+                variationId: z.coerce.number().optional().describe("ID de variación")
             }))
-        ).describe("Lista de productos a comprar"),
+        ).describe("Lista de productos"),
 
-        firstName: z.string().describe("Nombre del cliente"),
-        lastName: z.string().describe("Apellido del cliente"),
-        email: z.string().email().describe("Email para notificaciones"),
+        firstName: z.string().describe("Nombre"),
+        lastName: z.string().describe("Apellido"),
+        email: z.string().email().describe("Email"),
         phone: z.string().optional().describe("Teléfono"),
-
-        // Address
-        address: z.string().describe("Calle y número"),
+        address: z.string().describe("Dirección"),
         city: z.string().describe("Ciudad"),
-        state: z.string().optional().describe("Departamento/Estado (Código ISO si es posible, ej: CUN)"),
-        country: z.string().length(2).default("CO").describe("País (Código ISO, ej: CO)"),
-
-        note: z.string().optional().describe("Nota del cliente"),
-
-        // CHANGE 2: Support for shipping method (ID obtained from getShippingMethods)
-        shippingMethodId: z.string().optional().describe("ID del método de envío (ej: 'flat_rate:1'). Si se omite, Woo intentará asignar uno por defecto."),
-
-        // CHANGE 3: Coupons
-        couponCode: z.string().optional().describe("Código de cupón a aplicar")
+        state: z.string().optional().describe("Departamento"),
+        country: z.string().length(2).default("CO").describe("País"),
+        note: z.string().optional().describe("Nota"),
+        shippingMethodId: z.string().optional().describe("ID envío"),
+        couponCode: z.string().optional().describe("Cupón")
     }),
 
     handler: async (api, args) => {
         try {
-            console.log(`🛒 Creating Multi-Item order for ${args.email} | Items: ${args.items.length}`);
+            console.log(`🛒 Creating Order (${args.paymentMethod}) for ${args.email}`);
 
-            // 1. Map items to Woo format
             const lineItems = args.items.map(item => {
-                const line: any = {
-                    product_id: item.productId,
-                    quantity: item.quantity
-                };
+                const line: any = { product_id: item.productId, quantity: item.quantity };
                 if (item.variationId) line.variation_id = item.variationId;
                 return line;
             });
 
-            // 2. Configure shipping lines (if ID was sent)
-            const shippingLines = args.shippingMethodId ? [
-                {
-                    method_id: args.shippingMethodId,
-                    method_title: "Envío Seleccionado" // Woo will recalculate the real title on creation
-                }
-            ] : [];
+            // 👇👇👇 LÓGICA MÁGICA DE PAGO 👇👇👇
+            let paymentConfig = {};
 
-            // 3. Configure coupons
-            const couponLines = args.couponCode ? [
-                { code: args.couponCode }
-            ] : [];
+            if (args.paymentMethod === 'cod') {
+                // Configuración para CONTRAENTREGA
+                paymentConfig = {
+                    payment_method: "cod",
+                    payment_method_title: "Pago Contra Entrega",
+                    status: "processing", // La orden nace confirmada (para despachar)
+                    set_paid: false
+                };
+            } else {
+                // Configuración para PAGO ONLINE (Tarjeta/PSE)
+                paymentConfig = {
+                    payment_method: "bacs", // Pendiente / Transferencia
+                    payment_method_title: "Pago en Línea (Pendiente)",
+                    status: "pending", // La orden nace en espera del pago
+                    set_paid: false
+                };
+            }
 
-            // 4. Build full payload
             const data = {
-                payment_method: "cod",
-                payment_method_title: "Pago contra reembolso",
-                set_paid: false,
-                customer_note: args.note || "",
+                ...paymentConfig, // Inyectamos la config elegida arriba
+                customer_note: args.note || "Pedido vía Chatbot",
                 billing: {
                     first_name: args.firstName,
                     last_name: args.lastName,
@@ -98,37 +91,45 @@ export const createOrderTool: WooTool = {
                     country: args.country,
                 },
                 line_items: lineItems,
-                shipping_lines: shippingLines,
-                coupon_lines: couponLines
+                shipping_lines: args.shippingMethodId ? [{ method_id: args.shippingMethodId, method_title: "Envío" }] : [],
+                coupon_lines: args.couponCode ? [{ code: args.couponCode }] : []
             };
 
             const response = await api.post("orders", data);
             const order = response.data;
 
-            // 5. Enriched response
-            const resultData = {
+            // 👇 PREPARAMOS LA RESPUESTA PARA LA IA
+            let responseData: any = {
                 success: true,
                 order_id: order.id,
-                status: order.status,
-                currency: order.currency,
                 total: order.total,
-                shipping_total: order.shipping_total,
-                discount_total: order.discount_total, // To confirm if coupon worked
-                items_count: order.line_items.length,
-                payment_method: order.payment_method_title,
-                message: "Pedido creado exitosamente. Se ha enviado un correo al cliente."
+                status: order.status,
+                message: ""
             };
 
+            if (args.paymentMethod === 'online') {
+                // SI ES ONLINE -> Generamos y devolvemos el Link
+                const domain = "https://tiendamedicalospinos.com";
+                const payLink = `${domain}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
+
+                responseData.payment_link = payLink;
+                responseData.message = "Orden Creada. Se requiere pago en el link.";
+            } else {
+                // SI ES CONTRAENTREGA -> No hay link, solo confirmación
+                responseData.payment_link = null;
+                responseData.message = "Orden Confirmada exitosamente. Se pagará al recibir.";
+            }
+
+            console.log(`✅ Order #${order.id} Created [${args.paymentMethod}].`);
+
             return {
-                content: [{ type: "text", text: JSON.stringify(resultData, null, 2) }],
+                content: [{ type: "text", text: JSON.stringify(responseData, null, 2) }],
             };
 
         } catch (error: any) {
-            const wooError = error.response?.data?.message;
-            console.error("Error creating order:", wooError || error.message);
-
+            console.error("Error creating order:", error.response?.data?.message || error.message);
             return {
-                content: [{ type: "text", text: `Error al crear pedido: ${wooError || error.message}` }],
+                content: [{ type: "text", text: `Error: ${error.response?.data?.message || error.message}` }],
                 isError: true,
             };
         }
