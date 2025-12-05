@@ -1,9 +1,7 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
-// =========================================================
-// 1. DICCIONARIO DE DEPARTAMENTOS
-// =========================================================
+// --- DICCIONARIO DEPARTAMENTOS ---
 const COLOMBIA_STATES: Record<string, string> = {
     "AMAZONAS": "AMA", "ANTIOQUIA": "ANT", "ARAUCA": "ARA", "ATLÁNTICO": "ATL", "ATLANTICO": "ATL",
     "BOGOTÁ": "CUN", "BOGOTA": "CUN", "DC": "CUN", "BOLÍVAR": "BOL", "BOLIVAR": "BOL",
@@ -22,17 +20,17 @@ function getStateCode(stateName: string): string {
     return COLOMBIA_STATES[clean] || stateName;
 }
 
-// =========================================================
-// 2. DEFINICIÓN DE LA HERRAMIENTA
-// =========================================================
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce. Requiere JSON de items, nombre y apellido.",
+    description: "Crea un pedido en WooCommerce. IMPORTANTE: Los items deben enviarse como una cadena de texto JSON.",
 
+    // 🔥 ESQUEMA SIMPLIFICADO PARA EVITAR EL ERROR 424
     inputSchema: z.object({
-        paymentMethod: z.enum(["online", "cod"]).describe("online = Link de Pago | cod = Contraentrega"),
-        // Aceptamos string o array, lo arreglaremos en el handler
-        items: z.union([z.string(), z.array(z.any())]).describe("JSON Array de productos: [{'productId': 123, 'quantity': 1}]"),
+        paymentMethod: z.enum(["online", "cod"]).describe("online o cod"),
+
+        // Aquí está el cambio: Pedimos STRING explícitamente para que la conexión no falle.
+        items: z.string().describe("JSON String de productos. Ejemplo exacto: '[{\"productId\": 10282, \"quantity\": 1}]'"),
+
         firstName: z.string(),
         lastName: z.string(),
         email: z.string().email(),
@@ -48,140 +46,100 @@ export const createOrderTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            console.log("🚨 1. INICIO HANDLER - Args crudos:", JSON.stringify(args));
+            console.log("🚨 1. INPUT RECIBIDO:", JSON.stringify(args));
 
             // =========================================================
-            // 🔥 FASE DE SANEAMIENTO MANUAL (CRÍTICA)
+            // PARSEO MANUAL DE ITEMS (Aquí arreglamos el pedido vacío)
             // =========================================================
-
-            // 1. Arreglar ITEMS (Parsing forzado)
             let finalItems: any[] = [];
-            if (typeof args.items === 'string') {
-                try {
-                    // Si viene como string "[{...}]", lo parseamos
-                    finalItems = JSON.parse(args.items);
-                } catch (e) {
-                    console.error("Error parseando string items:", e);
-                    finalItems = [];
-                }
-            } else if (Array.isArray(args.items)) {
-                finalItems = args.items;
+
+            // Limpieza agresiva de strings (quita comillas extra si el LLM se equivoca)
+            let rawItems = args.items.trim();
+            if (rawItems.startsWith('"') && rawItems.endsWith('"')) {
+                rawItems = rawItems.slice(1, -1);
+            }
+            rawItems = rawItems.replace(/\\"/g, '"'); // Arregla comillas escapadas
+
+            try {
+                finalItems = JSON.parse(rawItems);
+            } catch (e) {
+                console.error("Error parseando JSON items:", e);
+                // Intento de salvación: si falla, miramos si llegó como objeto (raro con z.string, pero posible en runtime)
+                if (Array.isArray(args.items)) finalItems = args.items;
             }
 
-            // 2. Verificar si el array quedó vacío
             if (!finalItems || finalItems.length === 0) {
-                throw new Error("❌ Error: La lista de productos 'items' está vacía o mal formateada.");
+                throw new Error("❌ Error: No se pudieron leer los productos. Revisa el formato JSON.");
             }
 
-            // 3. Mapeo seguro de productos (Loggear qué claves vemos)
-            console.log("🔍 Analizando estructura del primer item:", finalItems[0]);
+            // Mapeo seguro a números
+            const lineItems = finalItems.map((item: any) => ({
+                product_id: Number(item.productId || item.product_id),
+                quantity: Number(item.quantity || 1),
+                variation_id: item.variationId ? Number(item.variationId) : undefined
+            }));
 
-            const lineItems = finalItems.map((item: any) => {
-                // Soportar camelCase (productId) Y snake_case (product_id)
-                const pId = item.productId || item.product_id;
-                const qty = item.quantity || 1;
-                const vId = item.variationId || item.variation_id || 0;
+            // Validación rápida de que tenemos números
+            if (isNaN(lineItems[0].product_id)) {
+                throw new Error(`❌ Error: El ID del producto no es un número válido. Recibido: ${JSON.stringify(lineItems)}`);
+            }
 
-                if (!pId) console.warn("⚠️ ALERTA: Item sin productId detectado", item);
-
-                const line: any = {
-                    product_id: Number(pId),
-                    quantity: Number(qty)
-                };
-                if (Number(vId) > 0) line.variation_id = Number(vId);
-
-                return line;
-            });
-
-            // 4. Saneamiento de Estado/Depto
+            // =========================================================
+            // CONFIGURACIÓN RESTO DEL PEDIDO
+            // =========================================================
             const cleanState = getStateCode(args.state || "");
 
-            // =========================================================
-            // CONFIGURACIÓN DE PAGO Y PAYLOAD
-            // =========================================================
-            let paymentConfig = {};
-            if (args.paymentMethod === 'cod') {
-                paymentConfig = {
-                    payment_method: "cod", payment_method_title: "Pago Contra Entrega",
-                    status: "processing", set_paid: false
-                };
-            } else {
-                paymentConfig = {
-                    payment_method: "bacs", payment_method_title: "Pago en Línea (Pendiente)",
-                    status: "pending", set_paid: false
-                };
-            }
-
-            // Construcción del objeto Data para WooCommerce
             const data = {
-                ...paymentConfig,
-                customer_note: args.note || "Pedido vía Chatbot",
+                payment_method: args.paymentMethod === 'cod' ? "cod" : "bacs",
+                payment_method_title: args.paymentMethod === 'cod' ? "Contraentrega" : "Pago en Línea",
+                set_paid: false,
+                status: args.paymentMethod === 'cod' ? "processing" : "pending",
+                customer_note: args.note,
                 billing: {
-                    first_name: args.firstName,
-                    last_name: args.lastName,
-                    address_1: args.address,
-                    city: args.city,
-                    state: cleanState,
-                    country: args.country || "CO",
-                    email: args.email,
-                    phone: args.phone || ""
+                    first_name: args.firstName, last_name: args.lastName,
+                    address_1: args.address, city: args.city,
+                    state: cleanState, country: args.country,
+                    email: args.email, phone: args.phone
                 },
                 shipping: {
-                    first_name: args.firstName,
-                    last_name: args.lastName,
-                    address_1: args.address,
-                    city: args.city,
-                    state: cleanState,
-                    country: args.country || "CO"
+                    first_name: args.firstName, last_name: args.lastName,
+                    address_1: args.address, city: args.city,
+                    state: cleanState, country: args.country
                 },
                 line_items: lineItems,
                 shipping_lines: args.shippingMethodId ? [{ method_id: args.shippingMethodId, method_title: "Envío" }] : [],
                 coupon_lines: args.couponCode ? [{ code: args.couponCode }] : []
             };
 
-            // 🔥 LOG DE ORO: Ver exactamente qué enviamos a WooCommerce
-            console.log("📦 PAYLOAD FINAL A WOO:", JSON.stringify(data, null, 2));
-
-            // Validación final antes de enviar
-            if (lineItems.some((i: any) => isNaN(i.product_id))) {
-                throw new Error("❌ Error Fatal: Se intentó enviar un Product ID inválido (NaN). Revisa el mapeo de items.");
-            }
+            console.log("📦 ENVIANDO A WOO:", JSON.stringify(data.line_items));
 
             const response = await api.post("orders", data);
             const order = response.data;
 
-            // =========================================================
             // RESPUESTA
-            // =========================================================
-            let responseData: any = {
+            let link = null;
+            if (args.paymentMethod === 'online') {
+                link = `https://tiendamedicalospinos.com/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
+            }
+
+            const result = {
                 success: true,
                 order_id: order.id,
                 total: order.total,
-                status: order.status,
-                message: ""
+                payment_link: link,
+                message: link ? "Pedido creado. Paga aquí." : "Pedido creado exitosamente."
             };
 
-            if (args.paymentMethod === 'online') {
-                const domain = "https://tiendamedicalospinos.com";
-                responseData.payment_link = `${domain}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
-                responseData.message = `Orden creada. Paga aquí: ${responseData.payment_link}`;
-            } else {
-                responseData.payment_link = null;
-                responseData.message = "Orden Contraentrega creada exitosamente.";
-            }
-
-            console.log(`✅ Orden #${order.id} creada OK. Total: ${order.total}`);
-
             return {
-                content: [{ type: "text", text: JSON.stringify(responseData, null, 2) }],
+                content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
             };
 
         } catch (error: any) {
-            console.error("❌ ERROR CRÍTICO:", error.response?.data || error.message);
+            console.error("❌ ERROR:", error.message);
             return {
-                content: [{ type: "text", text: `Error: ${error.message} - ${JSON.stringify(error.response?.data || "")}` }],
-                isError: true,
+                content: [{ type: "text", text: `Error: ${error.message}` }],
+                isError: true
             };
         }
-    },
+    }
 };
