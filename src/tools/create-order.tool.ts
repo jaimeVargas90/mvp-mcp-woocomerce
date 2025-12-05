@@ -1,133 +1,61 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
-// --- DICCIONARIO DEPARTAMENTOS ---
-const COLOMBIA_STATES: Record<string, string> = {
-    "AMAZONAS": "AMA", "ANTIOQUIA": "ANT", "ARAUCA": "ARA", "ATLÁNTICO": "ATL", "ATLANTICO": "ATL",
-    "BOGOTÁ": "CUN", "BOGOTA": "CUN", "DC": "CUN", "BOLÍVAR": "BOL", "BOLIVAR": "BOL",
-    "BOYACÁ": "BOY", "BOYACA": "BOY", "CALDAS": "CAL", "CAQUETÁ": "CAQ", "CAQUETA": "CAQ",
-    "CASANARE": "CAS", "CAUCA": "CAU", "CESAR": "CES", "CHOCÓ": "CHO", "CHOCO": "CHO",
-    "CÓRDOBA": "COR", "CORDOBA": "COR", "CUNDINAMARCA": "CUN", "GUAINÍA": "GUA", "GUAINIA": "GUA",
-    "GUAVIARE": "GUV", "HUILA": "HUI", "LA GUAJIRA": "LAG", "MAGDALENA": "MAG", "META": "MET",
-    "NARIÑO": "NAR", "NORTE DE SANTANDER": "NSA", "PUTUMAYO": "PUT", "QUINDÍO": "QUI", "QUINDIO": "QUI",
-    "RISARALDA": "RIS", "SAN ANDRÉS": "SAP", "SANTANDER": "SAN", "SUCRE": "SUC", "TOLIMA": "TOL",
-    "VALLE": "VAC", "VALLE DEL CAUCA": "VAC", "VAUPÉS": "VAU", "VAUPES": "VAU", "VICHADA": "VID"
-};
-
-function getStateCode(stateName: string): string {
-    if (!stateName || stateName.length <= 3) return stateName || "";
-    const clean = stateName.toUpperCase().trim();
-    return COLOMBIA_STATES[clean] || stateName;
-}
-
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce. IMPORTANTE: Los items deben enviarse como una cadena de texto JSON.",
+    description: "Crea un pedido en WooCommerce recibiendo el JSON completo (Payload) idéntico a la API.",
 
-    // 🔥 ESQUEMA SIMPLIFICADO PARA EVITAR EL ERROR 424
     inputSchema: z.object({
-        paymentMethod: z.enum(["online", "cod"]).describe("online o cod"),
-
-        // Aquí está el cambio: Pedimos STRING explícitamente para que la conexión no falle.
-        items: z.string().describe("JSON String de productos. Ejemplo exacto: '[{\"productId\": 10282, \"quantity\": 1}]'"),
-
-        firstName: z.string(),
-        lastName: z.string(),
-        email: z.string().email(),
-        phone: z.string().optional(),
-        address: z.string(),
-        city: z.string(),
-        state: z.string().optional(),
-        country: z.string().default("CO"),
-        note: z.string().optional(),
-        shippingMethodId: z.string().optional(),
-        couponCode: z.string().optional()
+        // Solo pedimos un argumento: El JSON completo como string
+        orderPayload: z.string().describe("El JSON completo del pedido con estructura de WooCommerce API (billing, shipping, line_items, etc).")
     }),
 
     handler: async (api, args) => {
         try {
-            console.log("🚨 1. INPUT RECIBIDO:", JSON.stringify(args));
+            console.log("🚨 1. PAYLOAD RECIBIDO DEL CHAT:", args.orderPayload);
 
-            // =========================================================
-            // PARSEO MANUAL DE ITEMS (Aquí arreglamos el pedido vacío)
-            // =========================================================
-            let finalItems: any[] = [];
+            // 1. Limpieza del string (Por si la IA manda comillas extra o bloques de código Markdown)
+            let cleanJson = args.orderPayload.trim();
 
-            // Limpieza agresiva de strings (quita comillas extra si el LLM se equivoca)
-            let rawItems = args.items.trim();
-            if (rawItems.startsWith('"') && rawItems.endsWith('"')) {
-                rawItems = rawItems.slice(1, -1);
+            // Quitar bloques de código markdown (```json ... ```) si la IA los pone
+            if (cleanJson.startsWith("```json")) {
+                cleanJson = cleanJson.replace("```json", "").replace("```", "");
+            } else if (cleanJson.startsWith("```")) {
+                cleanJson = cleanJson.replace("```", "");
             }
-            rawItems = rawItems.replace(/\\"/g, '"'); // Arregla comillas escapadas
 
+            cleanJson = cleanJson.trim();
+
+            // 2. Convertir Texto a Objeto JSON
+            let orderData;
             try {
-                finalItems = JSON.parse(rawItems);
+                orderData = JSON.parse(cleanJson);
             } catch (e) {
-                console.error("Error parseando JSON items:", e);
-                // Intento de salvación: si falla, miramos si llegó como objeto (raro con z.string, pero posible en runtime)
-                if (Array.isArray(args.items)) finalItems = args.items;
+                console.error("❌ Error de sintaxis JSON:", e);
+                throw new Error("El texto enviado por el chat no es un JSON válido. Revisa el prompt en uChat.");
             }
 
-            if (!finalItems || finalItems.length === 0) {
-                throw new Error("❌ Error: No se pudieron leer los productos. Revisa el formato JSON.");
-            }
+            console.log("📦 2. ENVIANDO A WOOCOMMERCE...", JSON.stringify(orderData.line_items));
 
-            // Mapeo seguro a números
-            const lineItems = finalItems.map((item: any) => ({
-                product_id: Number(item.productId || item.product_id),
-                quantity: Number(item.quantity || 1),
-                variation_id: item.variationId ? Number(item.variationId) : undefined
-            }));
-
-            // Validación rápida de que tenemos números
-            if (isNaN(lineItems[0].product_id)) {
-                throw new Error(`❌ Error: El ID del producto no es un número válido. Recibido: ${JSON.stringify(lineItems)}`);
-            }
-
-            // =========================================================
-            // CONFIGURACIÓN RESTO DEL PEDIDO
-            // =========================================================
-            const cleanState = getStateCode(args.state || "");
-
-            const data = {
-                payment_method: args.paymentMethod === 'cod' ? "cod" : "bacs",
-                payment_method_title: args.paymentMethod === 'cod' ? "Contraentrega" : "Pago en Línea",
-                set_paid: false,
-                status: args.paymentMethod === 'cod' ? "processing" : "pending",
-                customer_note: args.note,
-                billing: {
-                    first_name: args.firstName, last_name: args.lastName,
-                    address_1: args.address, city: args.city,
-                    state: cleanState, country: args.country,
-                    email: args.email, phone: args.phone
-                },
-                shipping: {
-                    first_name: args.firstName, last_name: args.lastName,
-                    address_1: args.address, city: args.city,
-                    state: cleanState, country: args.country
-                },
-                line_items: lineItems,
-                shipping_lines: args.shippingMethodId ? [{ method_id: args.shippingMethodId, method_title: "Envío" }] : [],
-                coupon_lines: args.couponCode ? [{ code: args.couponCode }] : []
-            };
-
-            console.log("📦 ENVIANDO A WOO:", JSON.stringify(data.line_items));
-
-            const response = await api.post("orders", data);
+            // 3. Enviar a WooCommerce (Pasamanos directo)
+            const response = await api.post("orders", orderData);
             const order = response.data;
 
-            // RESPUESTA
-            let link = null;
-            if (args.paymentMethod === 'online') {
-                link = `https://tiendamedicalospinos.com/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
+            // 4. Generar Link de Pago si es necesario (y si no es contraentrega)
+            let paymentLink = null;
+            if (orderData.payment_method !== 'cod' && order.status !== 'completed') {
+                paymentLink = `https://tiendamedicalospinos.com/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
             }
+
+            console.log(`✅ Pedido #${order.id} Creado. Total: ${order.total}`);
 
             const result = {
                 success: true,
                 order_id: order.id,
+                status: order.status,
                 total: order.total,
-                payment_link: link,
-                message: link ? "Pedido creado. Paga aquí." : "Pedido creado exitosamente."
+                payment_link: paymentLink,
+                message: "Pedido creado correctamente."
             };
 
             return {
@@ -135,9 +63,10 @@ export const createOrderTool: WooTool = {
             };
 
         } catch (error: any) {
-            console.error("❌ ERROR:", error.message);
+            console.error("❌ ERROR WOOCOMMERCE:", error.response?.data || error.message);
+            // Devolver error detallado para ver qué falló
             return {
-                content: [{ type: "text", text: `Error: ${error.message}` }],
+                content: [{ type: "text", text: `Error: ${error.message} - ${JSON.stringify(error.response?.data?.message || "")}` }],
                 isError: true
             };
         }
