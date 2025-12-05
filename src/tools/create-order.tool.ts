@@ -1,72 +1,85 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
+import axios from "axios"; // 🔥 IMPORTANTE: Usamos Axios directo
 
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce recibiendo el JSON completo (Payload) idéntico a la API.",
+    description: "Crea un pedido en WooCommerce (Modo Directo).",
 
     inputSchema: z.object({
-        // Solo pedimos un argumento: El JSON completo como string
-        orderPayload: z.string().describe("El JSON completo del pedido con estructura de WooCommerce API (billing, shipping, line_items, etc).")
+        orderPayload: z.string().describe("JSON completo del pedido.")
     }),
 
-    handler: async (api, args) => {
+    handler: async (api, args) => { // 'api' llega pero lo ignoraremos para usar axios manual
         try {
-            console.log("🚨 1. PAYLOAD RECIBIDO DEL CHAT:", args.orderPayload);
+            // 1. OBTENER Y LIMPIAR CREDENCIALES
+            // (Las leemos directamente del entorno para asegurar que no haya intermediarios)
+            let url = process.env.WOO_URL || "";
+            const key = process.env.WOO_CONSUMER_KEY || "";
+            const secret = process.env.WOO_SECRET || "";
 
-            // 1. Limpieza del string (Por si la IA manda comillas extra o bloques de código Markdown)
-            let cleanJson = args.orderPayload.trim();
+            // 🔥 CORRECCIÓN AUTOMÁTICA DE URL (El antídoto al pedido vacío)
+            if (url.endsWith("/")) url = url.slice(0, -1); // Quitar barra final
+            if (!url.startsWith("http")) url = "https://" + url; // Forzar protocolo
 
-            // Quitar bloques de código markdown (```json ... ```) si la IA los pone
-            if (cleanJson.startsWith("```json")) {
-                cleanJson = cleanJson.replace("```json", "").replace("```", "");
-            } else if (cleanJson.startsWith("```")) {
-                cleanJson = cleanJson.replace("```", "");
-            }
+            console.log(`🔌 CONECTANDO A: ${url}/wp-json/wc/v3/orders`);
 
-            cleanJson = cleanJson.trim();
-
-            // 2. Convertir Texto a Objeto JSON
+            // 2. PARSEAR EL JSON QUE VIENE DEL CHAT
             let orderData;
             try {
+                let cleanJson = args.orderPayload.trim();
+                // Limpieza de bloques de código Markdown
+                if (cleanJson.startsWith("```json")) cleanJson = cleanJson.replace("```json", "").replace("```", "");
+                if (cleanJson.startsWith("```")) cleanJson = cleanJson.replace("```", "");
                 orderData = JSON.parse(cleanJson);
             } catch (e) {
-                console.error("❌ Error de sintaxis JSON:", e);
-                throw new Error("El texto enviado por el chat no es un JSON válido. Revisa el prompt en uChat.");
+                throw new Error("El texto no es un JSON válido.");
             }
 
-            console.log("📦 2. ENVIANDO A WOOCOMMERCE...", JSON.stringify(orderData.line_items));
+            console.log("📦 PAYLOAD A ENVIAR:", JSON.stringify(orderData));
 
-            // 3. Enviar a WooCommerce (Pasamanos directo)
-            const response = await api.post("orders", orderData);
+            // 3. ENVÍO MANUAL CON AXIOS (Saltando la librería wrapper)
+            // Esto evita problemas de versión o redirecciones ocultas
+            const response = await axios.post(
+                `${url}/wp-json/wc/v3/orders`,
+                orderData,
+                {
+                    params: {
+                        consumer_key: key,
+                        consumer_secret: secret
+                    },
+                    headers: {
+                        "Content-Type": "application/json"
+                    }
+                }
+            );
+
             const order = response.data;
 
-            // 4. Generar Link de Pago si es necesario (y si no es contraentrega)
+            // 4. RESPUESTA EXITOSA
             let paymentLink = null;
-            if (orderData.payment_method !== 'cod' && order.status !== 'completed') {
-                paymentLink = `https://tiendamedicalospinos.com/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
+            if (order.status !== 'completed' && order.status !== 'processing') {
+                paymentLink = `${url}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
             }
 
-            console.log(`✅ Pedido #${order.id} Creado. Total: ${order.total}`);
-
-            const result = {
-                success: true,
-                order_id: order.id,
-                status: order.status,
-                total: order.total,
-                payment_link: paymentLink,
-                message: "Pedido creado correctamente."
-            };
+            console.log(`✅ ¡PEDIDO CREADO! ID: ${order.id} | Total: ${order.total}`);
 
             return {
-                content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+                content: [{
+                    type: "text", text: JSON.stringify({
+                        success: true,
+                        order_id: order.id,
+                        total: order.total,
+                        payment_link: paymentLink,
+                        message: "Pedido creado correctamente."
+                    }, null, 2)
+                }]
             };
 
         } catch (error: any) {
-            console.error("❌ ERROR WOOCOMMERCE:", error.response?.data || error.message);
-            // Devolver error detallado para ver qué falló
+            console.error("❌ ERROR AXIOS:", error.response?.data || error.message);
             return {
-                content: [{ type: "text", text: `Error: ${error.message} - ${JSON.stringify(error.response?.data?.message || "")}` }],
+                content: [{ type: "text", text: `Error: ${JSON.stringify(error.response?.data || error.message)}` }],
                 isError: true
             };
         }
