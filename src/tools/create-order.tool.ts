@@ -2,7 +2,7 @@ import { z } from "zod";
 import { WooTool } from "../types.js";
 
 // =========================================================
-// 1. DICCIONARIO Y HELPERS (Departamentos Colombia)
+// 1. DICCIONARIO DE DEPARTAMENTOS
 // =========================================================
 const COLOMBIA_STATES: Record<string, string> = {
     "AMAZONAS": "AMA", "ANTIOQUIA": "ANT", "ARAUCA": "ARA", "ATLÁNTICO": "ATL", "ATLANTICO": "ATL",
@@ -27,33 +27,19 @@ function getStateCode(stateName: string): string {
 // =========================================================
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce. IMPORTANTE: Requiere items, nombre separado (first/last) y email.",
+    description: "Crea un pedido en WooCommerce. Requiere JSON de items, nombre y apellido.",
 
     inputSchema: z.object({
         paymentMethod: z.enum(["online", "cod"]).describe("online = Link de Pago | cod = Contraentrega"),
-
-        // 🔥 MEJORA CRÍTICA: Preprocesador para leer JSON stringificado si el LLM se confunde
-        items: z.preprocess(
-            (val) => {
-                if (typeof val === 'string') {
-                    try { return JSON.parse(val); } catch (e) { return []; }
-                }
-                return val;
-            },
-            z.array(z.object({
-                productId: z.coerce.number().describe("ID del producto (Padre)"),
-                quantity: z.coerce.number().default(1).describe("Cantidad"),
-                variationId: z.any().optional().describe("ID de variación (Hijo) si aplica")
-            }))
-        ).describe("Lista de productos. Ejemplo: [{'productId': 10282, 'quantity': 1, 'variationId': 10283}]"),
-
-        firstName: z.string().describe("Primer nombre del cliente"),
-        lastName: z.string().describe("Apellido del cliente (si no tiene, repetir nombre)"),
+        // Aceptamos string o array, lo arreglaremos en el handler
+        items: z.union([z.string(), z.array(z.any())]).describe("JSON Array de productos: [{'productId': 123, 'quantity': 1}]"),
+        firstName: z.string(),
+        lastName: z.string(),
         email: z.string().email(),
         phone: z.string().optional(),
-        address: z.string().describe("Dirección completa (Calle/Carrera #)"),
-        city: z.string().describe("Ciudad"),
-        state: z.string().optional().describe("Departamento"),
+        address: z.string(),
+        city: z.string(),
+        state: z.string().optional(),
         country: z.string().default("CO"),
         note: z.string().optional(),
         shippingMethodId: z.string().optional(),
@@ -62,46 +48,57 @@ export const createOrderTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            console.log(`🔍 INPUT RAW RECIBIDO:`, JSON.stringify(args, null, 2));
+            console.log("🚨 1. INICIO HANDLER - Args crudos:", JSON.stringify(args));
 
-            // -----------------------------------------------------
-            // 🔥 VALIDACIÓN DE SEGURIDAD (Para evitar pedidos vacíos)
-            // -----------------------------------------------------
-            if (!args.items || args.items.length === 0) {
-                throw new Error("❌ ABORTANDO: La lista de productos (items) está vacía o no se pudo leer.");
-            }
-            if (!args.firstName || !args.lastName) {
-                // Intento de corrección simple si faltan nombres
-                if (!args.firstName && !args.lastName) throw new Error("❌ ABORTANDO: Falta el nombre del cliente.");
-            }
+            // =========================================================
+            // 🔥 FASE DE SANEAMIENTO MANUAL (CRÍTICA)
+            // =========================================================
 
-            // -----------------------------------------------------
-            // PASO A: Limpieza de Ítems
-            // -----------------------------------------------------
-            const lineItems = args.items.map((item: any) => {
-                const line: any = {
-                    product_id: Number(item.productId),
-                    quantity: Number(item.quantity)
-                };
-
-                // Manejo robusto de Variation ID
-                let vId = item.variationId || item.variation_id || 0;
-                vId = Number(vId);
-
-                if (vId > 0) {
-                    line.variation_id = vId;
+            // 1. Arreglar ITEMS (Parsing forzado)
+            let finalItems: any[] = [];
+            if (typeof args.items === 'string') {
+                try {
+                    // Si viene como string "[{...}]", lo parseamos
+                    finalItems = JSON.parse(args.items);
+                } catch (e) {
+                    console.error("Error parseando string items:", e);
+                    finalItems = [];
                 }
+            } else if (Array.isArray(args.items)) {
+                finalItems = args.items;
+            }
+
+            // 2. Verificar si el array quedó vacío
+            if (!finalItems || finalItems.length === 0) {
+                throw new Error("❌ Error: La lista de productos 'items' está vacía o mal formateada.");
+            }
+
+            // 3. Mapeo seguro de productos (Loggear qué claves vemos)
+            console.log("🔍 Analizando estructura del primer item:", finalItems[0]);
+
+            const lineItems = finalItems.map((item: any) => {
+                // Soportar camelCase (productId) Y snake_case (product_id)
+                const pId = item.productId || item.product_id;
+                const qty = item.quantity || 1;
+                const vId = item.variationId || item.variation_id || 0;
+
+                if (!pId) console.warn("⚠️ ALERTA: Item sin productId detectado", item);
+
+                const line: any = {
+                    product_id: Number(pId),
+                    quantity: Number(qty)
+                };
+                if (Number(vId) > 0) line.variation_id = Number(vId);
+
                 return line;
             });
 
-            // -----------------------------------------------------
-            // PASO B: Corrección del Departamento
-            // -----------------------------------------------------
+            // 4. Saneamiento de Estado/Depto
             const cleanState = getStateCode(args.state || "");
 
-            // -----------------------------------------------------
-            // PASO C: Configuración de Pago
-            // -----------------------------------------------------
+            // =========================================================
+            // CONFIGURACIÓN DE PAGO Y PAYLOAD
+            // =========================================================
             let paymentConfig = {};
             if (args.paymentMethod === 'cod') {
                 paymentConfig = {
@@ -115,36 +112,47 @@ export const createOrderTool: WooTool = {
                 };
             }
 
-            // -----------------------------------------------------
-            // PASO D: Payload Final a WooCommerce
-            // -----------------------------------------------------
+            // Construcción del objeto Data para WooCommerce
             const data = {
                 ...paymentConfig,
-                customer_note: args.note || "Pedido vía Chatbot IA",
+                customer_note: args.note || "Pedido vía Chatbot",
                 billing: {
-                    first_name: args.firstName, last_name: args.lastName,
-                    address_1: args.address, city: args.city,
-                    state: cleanState, country: args.country,
-                    email: args.email, phone: args.phone || ""
+                    first_name: args.firstName,
+                    last_name: args.lastName,
+                    address_1: args.address,
+                    city: args.city,
+                    state: cleanState,
+                    country: args.country || "CO",
+                    email: args.email,
+                    phone: args.phone || ""
                 },
                 shipping: {
-                    first_name: args.firstName, last_name: args.lastName,
-                    address_1: args.address, city: args.city,
-                    state: cleanState, country: args.country
+                    first_name: args.firstName,
+                    last_name: args.lastName,
+                    address_1: args.address,
+                    city: args.city,
+                    state: cleanState,
+                    country: args.country || "CO"
                 },
                 line_items: lineItems,
                 shipping_lines: args.shippingMethodId ? [{ method_id: args.shippingMethodId, method_title: "Envío" }] : [],
                 coupon_lines: args.couponCode ? [{ code: args.couponCode }] : []
             };
 
-            console.log("📦 Enviando Payload a Woo:", JSON.stringify(data));
+            // 🔥 LOG DE ORO: Ver exactamente qué enviamos a WooCommerce
+            console.log("📦 PAYLOAD FINAL A WOO:", JSON.stringify(data, null, 2));
+
+            // Validación final antes de enviar
+            if (lineItems.some((i: any) => isNaN(i.product_id))) {
+                throw new Error("❌ Error Fatal: Se intentó enviar un Product ID inválido (NaN). Revisa el mapeo de items.");
+            }
 
             const response = await api.post("orders", data);
             const order = response.data;
 
-            // -----------------------------------------------------
-            // PASO E: Respuesta Final
-            // -----------------------------------------------------
+            // =========================================================
+            // RESPUESTA
+            // =========================================================
             let responseData: any = {
                 success: true,
                 order_id: order.id,
@@ -156,23 +164,22 @@ export const createOrderTool: WooTool = {
             if (args.paymentMethod === 'online') {
                 const domain = "https://tiendamedicalospinos.com";
                 responseData.payment_link = `${domain}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
-                responseData.message = `Orden creada. Por favor paga aquí: ${responseData.payment_link}`;
+                responseData.message = `Orden creada. Paga aquí: ${responseData.payment_link}`;
             } else {
                 responseData.payment_link = null;
                 responseData.message = "Orden Contraentrega creada exitosamente.";
             }
 
-            console.log(`✅ Orden #${order.id} creada con éxito.`);
+            console.log(`✅ Orden #${order.id} creada OK. Total: ${order.total}`);
 
             return {
                 content: [{ type: "text", text: JSON.stringify(responseData, null, 2) }],
             };
 
         } catch (error: any) {
-            console.error("❌ Error en createOrder:", error.response?.data?.message || error.message);
-            // Retornamos el error formateado para que el chatbot sepa qué decir
+            console.error("❌ ERROR CRÍTICO:", error.response?.data || error.message);
             return {
-                content: [{ type: "text", text: `Error creando pedido: ${error.response?.data?.message || error.message}` }],
+                content: [{ type: "text", text: `Error: ${error.message} - ${JSON.stringify(error.response?.data || "")}` }],
                 isError: true,
             };
         }
