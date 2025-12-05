@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
-// ---------------------------------------------------------
-// 1. DICCIONARIO DE DEPARTAMENTOS (Corrección ISO)
-// ---------------------------------------------------------
+// =========================================================
+// 1. DICCIONARIO Y HELPERS (Departamentos Colombia)
+// =========================================================
 const COLOMBIA_STATES: Record<string, string> = {
     "AMAZONAS": "AMA", "ANTIOQUIA": "ANT", "ARAUCA": "ARA", "ATLÁNTICO": "ATL", "ATLANTICO": "ATL",
     "BOGOTÁ": "CUN", "BOGOTA": "CUN", "DC": "CUN", "BOLÍVAR": "BOL", "BOLIVAR": "BOL",
@@ -22,39 +22,38 @@ function getStateCode(stateName: string): string {
     return COLOMBIA_STATES[clean] || stateName;
 }
 
-// ---------------------------------------------------------
+// =========================================================
 // 2. DEFINICIÓN DE LA HERRAMIENTA
-// ---------------------------------------------------------
+// =========================================================
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea pedido en WooCommerce. Soporta variaciones, corrige departamentos y maneja pagos Online/COD.",
+    description: "Crea un pedido en WooCommerce. IMPORTANTE: Requiere items, nombre separado (first/last) y email.",
 
     inputSchema: z.object({
         paymentMethod: z.enum(["online", "cod"]).describe("online = Link de Pago | cod = Contraentrega"),
 
-        // 🔥 MEJORA: Preprocesador más robusto para los items
+        // 🔥 MEJORA CRÍTICA: Preprocesador para leer JSON stringificado si el LLM se confunde
         items: z.preprocess(
             (val) => {
                 if (typeof val === 'string') {
-                    try { return JSON.parse(val); } catch (e) { return val; }
+                    try { return JSON.parse(val); } catch (e) { return []; }
                 }
                 return val;
             },
             z.array(z.object({
                 productId: z.coerce.number().describe("ID del producto (Padre)"),
                 quantity: z.coerce.number().default(1).describe("Cantidad"),
-                // Aceptamos cualquier cosa y lo forzamos a número después
-                variationId: z.any().optional().describe("ID de variación (Hijo)")
+                variationId: z.any().optional().describe("ID de variación (Hijo) si aplica")
             }))
         ).describe("Lista de productos. Ejemplo: [{'productId': 10282, 'quantity': 1, 'variationId': 10283}]"),
 
-        firstName: z.string(),
-        lastName: z.string(),
+        firstName: z.string().describe("Primer nombre del cliente"),
+        lastName: z.string().describe("Apellido del cliente (si no tiene, repetir nombre)"),
         email: z.string().email(),
         phone: z.string().optional(),
-        address: z.string(),
-        city: z.string(),
-        state: z.string().optional(),
+        address: z.string().describe("Dirección completa (Calle/Carrera #)"),
+        city: z.string().describe("Ciudad"),
+        state: z.string().optional().describe("Departamento"),
         country: z.string().default("CO"),
         note: z.string().optional(),
         shippingMethodId: z.string().optional(),
@@ -63,31 +62,35 @@ export const createOrderTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            // 🔥 LOG DE RAYOS X: Ver qué llega realmente
-            console.log(`🔍 INPUT ITEMS RAW:`, JSON.stringify(args.items));
-            console.log(`🛒 Procesando para: ${args.email}`);
+            console.log(`🔍 INPUT RAW RECIBIDO:`, JSON.stringify(args, null, 2));
 
             // -----------------------------------------------------
-            // PASO A: Limpieza Inteligente de Ítems
+            // 🔥 VALIDACIÓN DE SEGURIDAD (Para evitar pedidos vacíos)
+            // -----------------------------------------------------
+            if (!args.items || args.items.length === 0) {
+                throw new Error("❌ ABORTANDO: La lista de productos (items) está vacía o no se pudo leer.");
+            }
+            if (!args.firstName || !args.lastName) {
+                // Intento de corrección simple si faltan nombres
+                if (!args.firstName && !args.lastName) throw new Error("❌ ABORTANDO: Falta el nombre del cliente.");
+            }
+
+            // -----------------------------------------------------
+            // PASO A: Limpieza de Ítems
             // -----------------------------------------------------
             const lineItems = args.items.map((item: any) => {
                 const line: any = {
-                    product_id: Number(item.productId), // Forzamos número
-                    quantity: Number(item.quantity)     // Forzamos número
+                    product_id: Number(item.productId),
+                    quantity: Number(item.quantity)
                 };
 
-                // Buscamos el ID de variación en camelCase O snake_case
-                // Y nos aseguramos de convertirlo a número real
+                // Manejo robusto de Variation ID
                 let vId = item.variationId || item.variation_id || 0;
-                vId = Number(vId); // Convertir "10283" -> 10283
+                vId = Number(vId);
 
                 if (vId > 0) {
                     line.variation_id = vId;
-                    console.log(`   ✅ Variación detectada: ${vId} para producto ${line.product_id}`);
-                } else {
-                    console.warn(`   ⚠️ Alerta: Producto ${line.product_id} va SIN variación (vId=${vId})`);
                 }
-
                 return line;
             });
 
@@ -113,7 +116,7 @@ export const createOrderTool: WooTool = {
             }
 
             // -----------------------------------------------------
-            // PASO D: Payload Final
+            // PASO D: Payload Final a WooCommerce
             // -----------------------------------------------------
             const data = {
                 ...paymentConfig,
@@ -134,7 +137,7 @@ export const createOrderTool: WooTool = {
                 coupon_lines: args.couponCode ? [{ code: args.couponCode }] : []
             };
 
-            console.log("📦 Payload FINAL a Woo:", JSON.stringify(data));
+            console.log("📦 Enviando Payload a Woo:", JSON.stringify(data));
 
             const response = await api.post("orders", data);
             const order = response.data;
@@ -153,22 +156,23 @@ export const createOrderTool: WooTool = {
             if (args.paymentMethod === 'online') {
                 const domain = "https://tiendamedicalospinos.com";
                 responseData.payment_link = `${domain}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
-                responseData.message = "Orden Creada. Se requiere pago en el link.";
+                responseData.message = `Orden creada. Por favor paga aquí: ${responseData.payment_link}`;
             } else {
                 responseData.payment_link = null;
-                responseData.message = "Orden Confirmada exitosamente.";
+                responseData.message = "Orden Contraentrega creada exitosamente.";
             }
 
-            console.log(`✅ Order #${order.id} Created. Total: ${order.total}`);
+            console.log(`✅ Orden #${order.id} creada con éxito.`);
 
             return {
                 content: [{ type: "text", text: JSON.stringify(responseData, null, 2) }],
             };
 
         } catch (error: any) {
-            console.error("❌ Error Woo:", error.response?.data?.message || error.message);
+            console.error("❌ Error en createOrder:", error.response?.data?.message || error.message);
+            // Retornamos el error formateado para que el chatbot sepa qué decir
             return {
-                content: [{ type: "text", text: `Error: ${error.response?.data?.message || error.message}` }],
+                content: [{ type: "text", text: `Error creando pedido: ${error.response?.data?.message || error.message}` }],
                 isError: true,
             };
         }
