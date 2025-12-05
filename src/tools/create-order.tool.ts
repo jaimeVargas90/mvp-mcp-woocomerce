@@ -4,48 +4,59 @@ import axios from "axios";
 
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce (Modo Directo con Credenciales Fijas).",
+    description: "Crea un pedido en WooCommerce recibiendo el JSON completo (Producción).",
 
     inputSchema: z.object({
-        orderPayload: z.string().describe("JSON completo del pedido.")
+        orderPayload: z.string().describe("JSON completo del pedido con estructura de WooCommerce API.")
     }),
 
     handler: async (api, args) => {
         try {
             // ============================================================
-            // 🚨 ZONA DE CREDENCIALES (PÉGALAS AQUÍ DIRECTAMENTE)
+            // 1. OBTENCIÓN SEGURA DE CREDENCIALES (Desde Railway/Env)
             // ============================================================
-            // 1. URL DE TU TIENDA (Ya la puse yo, NO la cambies)
-            let url = "https://tiendamedicalospinos.com";
+            // Intentamos leer las variables del sistema. 
+            // Si por alguna razón no están, intentamos sacarlas del objeto 'api' si fuera posible, 
+            // o dejamos strings vacíos para que salte el error abajo.
+            let url = process.env.WOO_URL || "";
+            const key = process.env.WOO_CONSUMER_KEY || "";
+            const secret = process.env.WOO_SECRET || "";
 
-            // 2. TUS CLAVES DE WOOCOMMERCE (¡Pegalas dentro de las comillas!)
-            const key = "ck_f9c4606e08a1780f8ff97168654ccac496b7210e"; // <--- Pega tu Consumer Key aquí
-            const secret = "cs_7d8d5e41d46b32885ef6161e5a08258a0c5ec098"; // <--- Pega tu Consumer Secret aquí
+            console.log(`🔍 Verificando entorno... URL detectada: ${url ? url : "NO DETECTADA"}`);
 
-            console.log(`🔌 1. CONECTANDO A: ${url}/wp-json/wc/v3/orders`);
-
-            // Validación rápida para que no falle silenciosamente
-            if (key.startsWith("ck_XXX") || secret.startsWith("cs_XXX")) {
-                throw new Error("❌ FALTA CONFIGURAR LAS CLAVES: Edita el archivo createOrder.ts y pon tus credenciales reales (ck_... y cs_...).");
+            // Validación de seguridad
+            if (!url || !key || !secret) {
+                throw new Error("❌ Error de Configuración: No se detectaron las variables de entorno (WOO_URL, WOO_CONSUMER_KEY, WOO_SECRET) en el servidor.");
             }
 
             // ============================================================
-            // LOGICA DE PROCESAMIENTO
+            // 2. LIMPIEZA Y PREPARACIÓN
             // ============================================================
+
+            // Corrección de URL para evitar redirecciones que borren datos
+            if (url.endsWith("/")) url = url.slice(0, -1);
+            if (!url.startsWith("http")) url = "https://" + url;
+
+            // Parseo del JSON que viene del chat
             let orderData;
             try {
                 let cleanJson = args.orderPayload.trim();
-                // Limpieza de bloques de código Markdown
+                // Limpiar bloques de código markdown si la IA los pone
                 if (cleanJson.startsWith("```json")) cleanJson = cleanJson.replace("```json", "").replace("```", "");
                 if (cleanJson.startsWith("```")) cleanJson = cleanJson.replace("```", "");
                 orderData = JSON.parse(cleanJson);
             } catch (e) {
-                throw new Error("El texto no es un JSON válido.");
+                throw new Error("El texto enviado no es un JSON válido.");
             }
 
-            console.log("📦 2. ENVIANDO PAYLOAD:", JSON.stringify(orderData.line_items));
+            console.log(`🔌 Conectando a: ${url}/wp-json/wc/v3/orders`);
+            console.log("📦 Payload parseado (Items):", JSON.stringify(orderData.line_items));
 
-            // ENVÍO MANUAL CON AXIOS
+            // ============================================================
+            // 3. ENVÍO ROBUSTO (AXIOS)
+            // ============================================================
+            // Usamos Axios en lugar de 'api.post' para tener control total sobre headers
+            // y evitar el bug del "pedido vacío" por redirecciones.
             const response = await axios.post(
                 `${url}/wp-json/wc/v3/orders`,
                 orderData,
@@ -62,32 +73,37 @@ export const createOrderTool: WooTool = {
 
             const order = response.data;
 
-            // RESPUESTA EXITOSA
+            // ============================================================
+            // 4. RESPUESTA
+            // ============================================================
             let paymentLink = null;
-            if (order.status !== 'completed' && order.status !== 'processing') {
+            // Generar link solo si no es contraentrega y no está completado
+            if (order.payment_method !== 'cod' && order.status !== 'completed' && order.status !== 'processing') {
                 paymentLink = `${url}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
             }
 
             console.log(`✅ ¡PEDIDO #${order.id} CREADO! Total: ${order.total}`);
 
+            const result = {
+                success: true,
+                order_id: order.id,
+                total: order.total,
+                status: order.status,
+                payment_link: paymentLink,
+                message: "Pedido creado correctamente."
+            };
+
             return {
-                content: [{
-                    type: "text", text: JSON.stringify({
-                        success: true,
-                        order_id: order.id,
-                        total: order.total,
-                        payment_link: paymentLink,
-                        message: "Pedido creado correctamente."
-                    }, null, 2)
-                }]
+                content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
             };
 
         } catch (error: any) {
-            // Log mejorado para ver el error real de Axios
-            const errorDetails = error.response ? JSON.stringify(error.response.data) : error.message;
-            console.error("❌ ERROR AXIOS:", errorDetails);
+            // Manejo detallado de errores
+            const errorMsg = error.response?.data?.message || error.message;
+            console.error("❌ ERROR CREATE ORDER:", errorMsg);
+
             return {
-                content: [{ type: "text", text: `Error conectando a la tienda: ${errorDetails}` }],
+                content: [{ type: "text", text: `Error creando el pedido: ${errorMsg}` }],
                 isError: true
             };
         }
