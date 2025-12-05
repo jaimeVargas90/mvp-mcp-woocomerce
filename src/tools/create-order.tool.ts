@@ -39,7 +39,9 @@ export const createOrderTool: WooTool = {
 
             if (order.payment_method !== 'cod' && order.status !== 'completed') {
                 if (baseUrl) {
-                    paymentLink = `${baseUrl}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
+                    // Quitamos barra final si la tiene para evitar dobles //
+                    const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+                    paymentLink = `${cleanBase}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
                 } else {
                     paymentLink = "(No se pudo generar el link automáticamente, verifica la configuración del host)";
                 }
