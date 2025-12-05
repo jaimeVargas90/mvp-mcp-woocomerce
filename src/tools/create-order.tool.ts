@@ -2,7 +2,7 @@ import { z } from "zod";
 import { WooTool } from "../types.js";
 
 // ---------------------------------------------------------
-// 1. DICCIONARIO DE DEPARTAMENTOS (Corrección ISO para WooCommerce)
+// 1. DICCIONARIO DE DEPARTAMENTOS (Corrección ISO)
 // ---------------------------------------------------------
 const COLOMBIA_STATES: Record<string, string> = {
     "AMAZONAS": "AMA", "ANTIOQUIA": "ANT", "ARAUCA": "ARA", "ATLÁNTICO": "ATL", "ATLANTICO": "ATL",
@@ -16,11 +16,10 @@ const COLOMBIA_STATES: Record<string, string> = {
     "VALLE": "VAC", "VALLE DEL CAUCA": "VAC", "VAUPÉS": "VAU", "VAUPES": "VAU", "VICHADA": "VID"
 };
 
-// Función auxiliar para obtener el código limpio
 function getStateCode(stateName: string): string {
     if (!stateName || stateName.length <= 3) return stateName || "";
     const clean = stateName.toUpperCase().trim();
-    return COLOMBIA_STATES[clean] || stateName; // Retorna el código o el original si no encuentra
+    return COLOMBIA_STATES[clean] || stateName;
 }
 
 // ---------------------------------------------------------
@@ -28,12 +27,12 @@ function getStateCode(stateName: string): string {
 // ---------------------------------------------------------
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce. Corrige departamentos y soporta Pago Online/Contraentrega.",
+    description: "Crea pedido en WooCommerce. Soporta variaciones, corrige departamentos y maneja pagos Online/COD.",
 
     inputSchema: z.object({
         paymentMethod: z.enum(["online", "cod"]).describe("online = Link de Pago | cod = Contraentrega"),
 
-        // Procesamiento de items (conversión de String a JSON si es necesario)
+        // 🔥 MEJORA: Preprocesador más robusto para los items
         items: z.preprocess(
             (val) => {
                 if (typeof val === 'string') {
@@ -42,105 +41,106 @@ export const createOrderTool: WooTool = {
                 return val;
             },
             z.array(z.object({
-                productId: z.coerce.number().describe("ID del producto"),
-                quantity: z.coerce.number().min(1).default(1).describe("Cantidad"),
-                variationId: z.coerce.number().optional().describe("ID de variación")
+                productId: z.coerce.number().describe("ID del producto (Padre)"),
+                quantity: z.coerce.number().default(1).describe("Cantidad"),
+                // Aceptamos cualquier cosa y lo forzamos a número después
+                variationId: z.any().optional().describe("ID de variación (Hijo)")
             }))
-        ).describe("Lista de productos"),
+        ).describe("Lista de productos. Ejemplo: [{'productId': 10282, 'quantity': 1, 'variationId': 10283}]"),
 
-        firstName: z.string().describe("Nombre"),
-        lastName: z.string().describe("Apellido"),
-        email: z.string().email().describe("Email"),
-        phone: z.string().optional().describe("Teléfono"),
-        address: z.string().describe("Dirección"),
-        city: z.string().describe("Ciudad"),
-        state: z.string().optional().describe("Departamento"),
-        country: z.string().length(2).default("CO").describe("País"),
-        note: z.string().optional().describe("Nota"),
-        shippingMethodId: z.string().optional().describe("ID envío"),
-        couponCode: z.string().optional().describe("Cupón")
+        firstName: z.string(),
+        lastName: z.string(),
+        email: z.string().email(),
+        phone: z.string().optional(),
+        address: z.string(),
+        city: z.string(),
+        state: z.string().optional(),
+        country: z.string().default("CO"),
+        note: z.string().optional(),
+        shippingMethodId: z.string().optional(),
+        couponCode: z.string().optional()
     }),
 
     handler: async (api, args) => {
         try {
-            console.log(`🛒 Procesando Orden (${args.paymentMethod}) para: ${args.email}`);
+            // 🔥 LOG DE RAYOS X: Ver qué llega realmente
+            console.log(`🔍 INPUT ITEMS RAW:`, JSON.stringify(args.items));
+            console.log(`🛒 Procesando para: ${args.email}`);
 
             // -----------------------------------------------------
-            // PASO A: Limpieza de Ítems (Vital para evitar orden vacía)
+            // PASO A: Limpieza Inteligente de Ítems
             // -----------------------------------------------------
-            const lineItems = args.items.map(item => {
-                const line: any = { product_id: item.productId, quantity: item.quantity };
+            const lineItems = args.items.map((item: any) => {
+                const line: any = {
+                    product_id: Number(item.productId), // Forzamos número
+                    quantity: Number(item.quantity)     // Forzamos número
+                };
 
-                // Solo enviamos variation_id si es un número válido mayor a 0
-                // Si enviamos "0", WooCommerce puede ignorar la línea completa
-                if (item.variationId && item.variationId > 0) {
-                    line.variation_id = item.variationId;
+                // Buscamos el ID de variación en camelCase O snake_case
+                // Y nos aseguramos de convertirlo a número real
+                let vId = item.variationId || item.variation_id || 0;
+                vId = Number(vId); // Convertir "10283" -> 10283
+
+                if (vId > 0) {
+                    line.variation_id = vId;
+                    console.log(`   ✅ Variación detectada: ${vId} para producto ${line.product_id}`);
+                } else {
+                    console.warn(`   ⚠️ Alerta: Producto ${line.product_id} va SIN variación (vId=${vId})`);
                 }
+
                 return line;
             });
 
             // -----------------------------------------------------
-            // PASO B: Corrección del Departamento (Antioquia -> ANT)
+            // PASO B: Corrección del Departamento
             // -----------------------------------------------------
             const cleanState = getStateCode(args.state || "");
 
             // -----------------------------------------------------
-            // PASO C: Configuración de Pago (Tu lógica unificada)
+            // PASO C: Configuración de Pago
             // -----------------------------------------------------
             let paymentConfig = {};
             if (args.paymentMethod === 'cod') {
                 paymentConfig = {
-                    payment_method: "cod",
-                    payment_method_title: "Pago Contra Entrega",
-                    status: "processing",
-                    set_paid: false
+                    payment_method: "cod", payment_method_title: "Pago Contra Entrega",
+                    status: "processing", set_paid: false
                 };
             } else {
                 paymentConfig = {
-                    payment_method: "bacs",
-                    payment_method_title: "Pago en Línea (Pendiente)",
-                    status: "pending",
-                    set_paid: false
+                    payment_method: "bacs", payment_method_title: "Pago en Línea (Pendiente)",
+                    status: "pending", set_paid: false
                 };
             }
 
             // -----------------------------------------------------
-            // PASO D: Construcción del Payload
+            // PASO D: Payload Final
             // -----------------------------------------------------
             const data = {
                 ...paymentConfig,
                 customer_note: args.note || "Pedido vía Chatbot IA",
                 billing: {
-                    first_name: args.firstName,
-                    last_name: args.lastName,
-                    address_1: args.address,
-                    city: args.city,
-                    state: cleanState, // <--- AQUÍ USAMOS EL ESTADO CORREGIDO
-                    country: args.country,
-                    email: args.email,
-                    phone: args.phone || ""
+                    first_name: args.firstName, last_name: args.lastName,
+                    address_1: args.address, city: args.city,
+                    state: cleanState, country: args.country,
+                    email: args.email, phone: args.phone || ""
                 },
                 shipping: {
-                    first_name: args.firstName,
-                    last_name: args.lastName,
-                    address_1: args.address,
-                    city: args.city,
-                    state: cleanState, // <--- AQUÍ TAMBIÉN
-                    country: args.country
+                    first_name: args.firstName, last_name: args.lastName,
+                    address_1: args.address, city: args.city,
+                    state: cleanState, country: args.country
                 },
                 line_items: lineItems,
                 shipping_lines: args.shippingMethodId ? [{ method_id: args.shippingMethodId, method_title: "Envío" }] : [],
                 coupon_lines: args.couponCode ? [{ code: args.couponCode }] : []
             };
 
-            // Log para depuración en Railway
-            console.log("📦 Payload enviado a Woo:", JSON.stringify(data));
+            console.log("📦 Payload FINAL a Woo:", JSON.stringify(data));
 
             const response = await api.post("orders", data);
             const order = response.data;
 
             // -----------------------------------------------------
-            // PASO E: Respuesta Final con Link (si aplica)
+            // PASO E: Respuesta Final
             // -----------------------------------------------------
             let responseData: any = {
                 success: true,
@@ -152,16 +152,14 @@ export const createOrderTool: WooTool = {
 
             if (args.paymentMethod === 'online') {
                 const domain = "https://tiendamedicalospinos.com";
-                const payLink = `${domain}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
-
-                responseData.payment_link = payLink;
+                responseData.payment_link = `${domain}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
                 responseData.message = "Orden Creada. Se requiere pago en el link.";
             } else {
                 responseData.payment_link = null;
-                responseData.message = "Orden Confirmada exitosamente. Se pagará al recibir.";
+                responseData.message = "Orden Confirmada exitosamente.";
             }
 
-            console.log(`✅ Order #${order.id} Created.`);
+            console.log(`✅ Order #${order.id} Created. Total: ${order.total}`);
 
             return {
                 content: [{ type: "text", text: JSON.stringify(responseData, null, 2) }],
