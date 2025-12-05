@@ -1,16 +1,39 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
+// ---------------------------------------------------------
+// 1. DICCIONARIO DE DEPARTAMENTOS (Corrección ISO para WooCommerce)
+// ---------------------------------------------------------
+const COLOMBIA_STATES: Record<string, string> = {
+    "AMAZONAS": "AMA", "ANTIOQUIA": "ANT", "ARAUCA": "ARA", "ATLÁNTICO": "ATL", "ATLANTICO": "ATL",
+    "BOGOTÁ": "CUN", "BOGOTA": "CUN", "DC": "CUN", "BOLÍVAR": "BOL", "BOLIVAR": "BOL",
+    "BOYACÁ": "BOY", "BOYACA": "BOY", "CALDAS": "CAL", "CAQUETÁ": "CAQ", "CAQUETA": "CAQ",
+    "CASANARE": "CAS", "CAUCA": "CAU", "CESAR": "CES", "CHOCÓ": "CHO", "CHOCO": "CHO",
+    "CÓRDOBA": "COR", "CORDOBA": "COR", "CUNDINAMARCA": "CUN", "GUAINÍA": "GUA", "GUAINIA": "GUA",
+    "GUAVIARE": "GUV", "HUILA": "HUI", "LA GUAJIRA": "LAG", "MAGDALENA": "MAG", "META": "MET",
+    "NARIÑO": "NAR", "NORTE DE SANTANDER": "NSA", "PUTUMAYO": "PUT", "QUINDÍO": "QUI", "QUINDIO": "QUI",
+    "RISARALDA": "RIS", "SAN ANDRÉS": "SAP", "SANTANDER": "SAN", "SUCRE": "SUC", "TOLIMA": "TOL",
+    "VALLE": "VAC", "VALLE DEL CAUCA": "VAC", "VAUPÉS": "VAU", "VAUPES": "VAU", "VICHADA": "VID"
+};
+
+// Función auxiliar para obtener el código limpio
+function getStateCode(stateName: string): string {
+    if (!stateName || stateName.length <= 3) return stateName || "";
+    const clean = stateName.toUpperCase().trim();
+    return COLOMBIA_STATES[clean] || stateName; // Retorna el código o el original si no encuentra
+}
+
+// ---------------------------------------------------------
+// 2. DEFINICIÓN DE LA HERRAMIENTA
+// ---------------------------------------------------------
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido en WooCommerce. Soporta 'Pago en Línea' (genera link) y 'Contra Entrega' (sin link).",
+    description: "Crea un pedido en WooCommerce. Corrige departamentos y soporta Pago Online/Contraentrega.",
 
     inputSchema: z.object({
-        // 👇👇👇 NUEVO CAMPO: SELECTOR DE PAGO 👇👇👇
-        paymentMethod: z.enum(["online", "cod"])
-            .describe("Método de pago. Usa 'online' si el cliente quiere pagar ya (Link de pago). Usa 'cod' si el cliente pagará al recibir (Contraentrega)."),
+        paymentMethod: z.enum(["online", "cod"]).describe("online = Link de Pago | cod = Contraentrega"),
 
-        // ... (El resto de tus campos de productos siguen igual) ...
+        // Procesamiento de items (conversión de String a JSON si es necesario)
         items: z.preprocess(
             (val) => {
                 if (typeof val === 'string') {
@@ -40,65 +63,85 @@ export const createOrderTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            console.log(`🛒 Creating Order (${args.paymentMethod}) for ${args.email}`);
+            console.log(`🛒 Procesando Orden (${args.paymentMethod}) para: ${args.email}`);
 
+            // -----------------------------------------------------
+            // PASO A: Limpieza de Ítems (Vital para evitar orden vacía)
+            // -----------------------------------------------------
             const lineItems = args.items.map(item => {
                 const line: any = { product_id: item.productId, quantity: item.quantity };
-                if (item.variationId) line.variation_id = item.variationId;
+
+                // Solo enviamos variation_id si es un número válido mayor a 0
+                // Si enviamos "0", WooCommerce puede ignorar la línea completa
+                if (item.variationId && item.variationId > 0) {
+                    line.variation_id = item.variationId;
+                }
                 return line;
             });
 
-            // 👇👇👇 LÓGICA MÁGICA DE PAGO 👇👇👇
-            let paymentConfig = {};
+            // -----------------------------------------------------
+            // PASO B: Corrección del Departamento (Antioquia -> ANT)
+            // -----------------------------------------------------
+            const cleanState = getStateCode(args.state || "");
 
+            // -----------------------------------------------------
+            // PASO C: Configuración de Pago (Tu lógica unificada)
+            // -----------------------------------------------------
+            let paymentConfig = {};
             if (args.paymentMethod === 'cod') {
-                // Configuración para CONTRAENTREGA
                 paymentConfig = {
                     payment_method: "cod",
                     payment_method_title: "Pago Contra Entrega",
-                    status: "processing", // La orden nace confirmada (para despachar)
+                    status: "processing",
                     set_paid: false
                 };
             } else {
-                // Configuración para PAGO ONLINE (Tarjeta/PSE)
                 paymentConfig = {
-                    payment_method: "bacs", // Pendiente / Transferencia
+                    payment_method: "bacs",
                     payment_method_title: "Pago en Línea (Pendiente)",
-                    status: "pending", // La orden nace en espera del pago
+                    status: "pending",
                     set_paid: false
                 };
             }
 
+            // -----------------------------------------------------
+            // PASO D: Construcción del Payload
+            // -----------------------------------------------------
             const data = {
-                ...paymentConfig, // Inyectamos la config elegida arriba
-                customer_note: args.note || "Pedido vía Chatbot",
+                ...paymentConfig,
+                customer_note: args.note || "Pedido vía Chatbot IA",
                 billing: {
                     first_name: args.firstName,
                     last_name: args.lastName,
                     address_1: args.address,
                     city: args.city,
-                    state: args.state || "",
+                    state: cleanState, // <--- AQUÍ USAMOS EL ESTADO CORREGIDO
                     country: args.country,
                     email: args.email,
-                    phone: args.phone || "",
+                    phone: args.phone || ""
                 },
                 shipping: {
                     first_name: args.firstName,
                     last_name: args.lastName,
                     address_1: args.address,
                     city: args.city,
-                    state: args.state || "",
-                    country: args.country,
+                    state: cleanState, // <--- AQUÍ TAMBIÉN
+                    country: args.country
                 },
                 line_items: lineItems,
                 shipping_lines: args.shippingMethodId ? [{ method_id: args.shippingMethodId, method_title: "Envío" }] : [],
                 coupon_lines: args.couponCode ? [{ code: args.couponCode }] : []
             };
 
+            // Log para depuración en Railway
+            console.log("📦 Payload enviado a Woo:", JSON.stringify(data));
+
             const response = await api.post("orders", data);
             const order = response.data;
 
-            // 👇 PREPARAMOS LA RESPUESTA PARA LA IA
+            // -----------------------------------------------------
+            // PASO E: Respuesta Final con Link (si aplica)
+            // -----------------------------------------------------
             let responseData: any = {
                 success: true,
                 order_id: order.id,
@@ -108,26 +151,24 @@ export const createOrderTool: WooTool = {
             };
 
             if (args.paymentMethod === 'online') {
-                // SI ES ONLINE -> Generamos y devolvemos el Link
                 const domain = "https://tiendamedicalospinos.com";
                 const payLink = `${domain}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
 
                 responseData.payment_link = payLink;
                 responseData.message = "Orden Creada. Se requiere pago en el link.";
             } else {
-                // SI ES CONTRAENTREGA -> No hay link, solo confirmación
                 responseData.payment_link = null;
                 responseData.message = "Orden Confirmada exitosamente. Se pagará al recibir.";
             }
 
-            console.log(`✅ Order #${order.id} Created [${args.paymentMethod}].`);
+            console.log(`✅ Order #${order.id} Created.`);
 
             return {
                 content: [{ type: "text", text: JSON.stringify(responseData, null, 2) }],
             };
 
         } catch (error: any) {
-            console.error("Error creating order:", error.response?.data?.message || error.message);
+            console.error("❌ Error Woo:", error.response?.data?.message || error.message);
             return {
                 content: [{ type: "text", text: `Error: ${error.response?.data?.message || error.message}` }],
                 isError: true,
