@@ -13,27 +13,25 @@ export const createOrderTool: WooTool = {
     handler: async (api, args) => {
         try {
             // ============================================================
-            // 1. OBTENCIÓN SEGURA DE CREDENCIALES (Desde Railway/Env)
+            // 1. OBTENCIÓN DE CREDENCIALES (Desde Railway/Env)
             // ============================================================
-            // Intentamos leer las variables del sistema. 
-            // Si por alguna razón no están, intentamos sacarlas del objeto 'api' si fuera posible, 
-            // o dejamos strings vacíos para que salte el error abajo.
+            // Leemos las variables del sistema, igual que lo hace tu archivo principal.
             let url = process.env.WOO_URL || "";
             const key = process.env.WOO_CONSUMER_KEY || "";
             const secret = process.env.WOO_SECRET || "";
 
             console.log(`🔍 Verificando entorno... URL detectada: ${url ? url : "NO DETECTADA"}`);
 
-            // Validación de seguridad
+            // Validación de seguridad: Si faltan, lanzamos error explícito.
             if (!url || !key || !secret) {
-                throw new Error("❌ Error de Configuración: No se detectaron las variables de entorno (WOO_URL, WOO_CONSUMER_KEY, WOO_SECRET) en el servidor.");
+                throw new Error("❌ Error de Configuración: No se detectaron las variables WOO_URL, WOO_CONSUMER_KEY o WOO_SECRET en Railway.");
             }
 
             // ============================================================
-            // 2. LIMPIEZA Y PREPARACIÓN
+            // 2. LIMPIEZA Y PREPARACIÓN (El secreto del éxito)
             // ============================================================
 
-            // Corrección de URL para evitar redirecciones que borren datos
+            // Corrección automática de URL para evitar redirecciones que borren datos
             if (url.endsWith("/")) url = url.slice(0, -1);
             if (!url.startsWith("http")) url = "https://" + url;
 
@@ -55,8 +53,7 @@ export const createOrderTool: WooTool = {
             // ============================================================
             // 3. ENVÍO ROBUSTO (AXIOS)
             // ============================================================
-            // Usamos Axios en lugar de 'api.post' para tener control total sobre headers
-            // y evitar el bug del "pedido vacío" por redirecciones.
+            // Usamos Axios directo con las credenciales obtenidas del entorno
             const response = await axios.post(
                 `${url}/wp-json/wc/v3/orders`,
                 orderData,
