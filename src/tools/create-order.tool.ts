@@ -4,53 +4,73 @@ import axios from "axios";
 
 export const createOrderTool: WooTool = {
     name: "createOrder",
-    description: "Crea un pedido extrayendo credenciales del cliente activo.",
+    description: "Crea un pedido en la tienda. No requiere construir JSON complejo, solo pasar los datos del cliente y los productos.",
 
     inputSchema: z.object({
-        orderPayload: z.string().describe("JSON completo del pedido.")
+        // 1. Datos del Cliente (Simplificados)
+        firstName: z.string().describe("Nombre del cliente"),
+        lastName: z.string().describe("Apellido del cliente"),
+        email: z.string().email().describe("Email del cliente"),
+        phone: z.string().describe("Teléfono"),
+        address: z.string().describe("Dirección completa"),
+        city: z.string().describe("Ciudad"),
+        state: z.string().describe("Código de provincia/estado (ej: ANT, CUN, BOG)"),
+        country: z.string().default("CO").describe("Código de país (Default: CO)"),
+
+        // 2. Productos (Array simple)
+        line_items: z.array(z.object({
+            product_id: z.number().describe("ID del producto a comprar"),
+            variation_id: z.number().optional().describe("ID de la variación si aplica (talla/color)"),
+            quantity: z.number().default(1).describe("Cantidad")
+        })).describe("Lista de productos a comprar"),
+
+        // 3. Método de pago (Opcional, con defaults inteligentes)
+        paymentMethod: z.enum(["bacs", "cod"]).default("bacs").describe("bacs (Transferencia) o cod (Contra entrega)"),
+        paymentTitle: z.string().optional().describe("Título del pago (ej: Transferencia Bancaria)")
     }),
 
     handler: async (api, args) => {
         try {
-            // 1. EXTRAER CREDENCIALES
-            // Forzamos el tipo 'api' a any para acceder a propiedades internas manualmente
-            const client = api as any;
+            // --- 1. CONSTRUCCIÓN DEL JSON "DIFÍCIL" (Lo hacemos aquí, no en el Prompt) ---
+            const billingData = {
+                first_name: args.firstName,
+                last_name: args.lastName,
+                address_1: args.address,
+                city: args.city,
+                state: args.state,
+                postcode: "", // Opcional
+                country: args.country,
+                email: args.email,
+                phone: args.phone
+            };
 
-            // Intentamos leer la URL y Claves que la librería ya cargó desde Railway
+            // Por defecto, envío = facturación para simplificar
+            const shippingData = { ...billingData };
+
+            const orderPayload = {
+                payment_method: args.paymentMethod,
+                payment_method_title: args.paymentTitle || (args.paymentMethod === 'cod' ? 'Contra Entrega' : 'Transferencia'),
+                set_paid: false,
+                status: "pending", // Siempre pendiente hasta que paguen
+                billing: billingData,
+                shipping: shippingData,
+                line_items: args.line_items
+            };
+
+            // --- 2. LOGICA DE CONEXIÓN (Igual que antes, robusta) ---
+            const client = api as any;
             let url = client.url || client._url || "";
             const key = client.consumerKey || client._consumerKey || "";
             const secret = client.consumerSecret || client._consumerSecret || "";
 
-            console.log(`🔍 Diagnóstico de Cliente: URL=${url ? 'OK' : 'VACÍA'} | Key=${key ? 'OK' : 'FALTA'}`);
-
-            if (!url || !key || !secret) {
-                throw new Error("❌ Error Interno: No se pudieron extraer las credenciales del cliente activo.");
-            }
-
-            // 2. LIMPIEZA DE URL (Para evitar el error ENOTFOUND)
-            // Si la URL termina en /, la quitamos
-            if (url.endsWith("/")) url = url.slice(0, -1);
-            // Aseguramos protocolo
             if (!url.startsWith("http")) url = "https://" + url;
+            if (url.endsWith("/")) url = url.slice(0, -1);
 
-            // 3. PREPARAR DATOS
-            let orderData;
-            try {
-                let cleanJson = args.orderPayload.trim();
-                if (cleanJson.startsWith("```json")) cleanJson = cleanJson.replace("```json", "").replace("```", "");
-                if (cleanJson.startsWith("```")) cleanJson = cleanJson.replace("```", "");
-                orderData = JSON.parse(cleanJson);
-            } catch (e) {
-                throw new Error("El JSON del pedido no es válido.");
-            }
+            console.log(`🛒 Creando pedido para: ${args.firstName} ${args.lastName} | Items: ${args.line_items.length}`);
 
-            console.log(`🔌 Conectando manualmente a: ${url}/wp-json/wc/v3/orders`);
-
-            // 4. ENVIAR CON AXIOS
-            // Petición directa para evitar problemas de librería con endpoints específicos
             const response = await axios.post(
                 `${url}/wp-json/wc/v3/orders`,
-                orderData,
+                orderPayload,
                 {
                     params: { consumer_key: key, consumer_secret: secret },
                     headers: { "Content-Type": "application/json" }
@@ -59,35 +79,32 @@ export const createOrderTool: WooTool = {
 
             const order = response.data;
 
-            // 5. RESPUESTA
+            // --- 3. RESPUESTA ---
+            // Generamos link de pago si no es Contra Entrega
             let paymentLink = null;
             if (order.payment_method !== 'cod' && order.status !== 'completed') {
+                // Intentamos ser más inteligentes con la URL del checkout
                 paymentLink = `${url}/finalizar-compra/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`;
             }
-
-            console.log(`✅ ¡PEDIDO #${order.id} CREADO CORRECTAMENTE! Total: ${order.total}`);
 
             return {
                 content: [{
                     type: "text", text: JSON.stringify({
                         success: true,
                         order_id: order.id,
+                        status: order.status,
                         total: order.total,
-                        payment_link: paymentLink,
-                        message: "Pedido creado correctamente."
+                        payment_link: paymentLink, // El LLM le mostrará esto al usuario
+                        message: "Pedido creado exitosamente."
                     }, null, 2)
                 }]
             };
 
         } catch (error: any) {
             const msg = error.response?.data?.message || error.message;
-            console.error("❌ ERROR FATAL:", msg);
-            // Si falla, mostramos qué URL intentó usar para depurar
-            if (error.code === 'ENOTFOUND') {
-                return { content: [{ type: "text", text: `Error de URL: Intenté conectar a '${error.config?.url}' pero falló.` }], isError: true };
-            }
+            console.error("❌ Error creando pedido:", msg);
             return {
-                content: [{ type: "text", text: `Error: ${msg}` }],
+                content: [{ type: "text", text: `Error al crear el pedido: ${msg}` }],
                 isError: true
             };
         }
