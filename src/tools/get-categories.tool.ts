@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
+/**
+ * Herramienta para obtener las categorías de productos de la tienda.
+ */
 export const getCategoriesTool: WooTool = {
     name: "getStoreCategories",
     description: "Obtiene la lista de categorías de productos de la tienda. Úsalo cuando el usuario pregunte qué tipo de productos vendemos en general.",

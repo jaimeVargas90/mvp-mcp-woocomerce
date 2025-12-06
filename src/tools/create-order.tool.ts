@@ -12,8 +12,8 @@ export const createOrderTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            // 1. EXTRAER CREDENCIALES DEL OBJETO API (El truco maestro)
-            // Forzamos a TypeScript a tratar 'api' como cualquier objeto para leer sus propiedades internas
+            // 1. EXTRAER CREDENCIALES
+            // Forzamos el tipo 'api' a any para acceder a propiedades internas manualmente
             const client = api as any;
 
             // Intentamos leer la URL y Claves que la librería ya cargó desde Railway
@@ -46,7 +46,8 @@ export const createOrderTool: WooTool = {
 
             console.log(`🔌 Conectando manualmente a: ${url}/wp-json/wc/v3/orders`);
 
-            // 4. ENVIAR CON AXIOS (Saltándonos la librería que falla)
+            // 4. ENVIAR CON AXIOS
+            // Petición directa para evitar problemas de librería con endpoints específicos
             const response = await axios.post(
                 `${url}/wp-json/wc/v3/orders`,
                 orderData,

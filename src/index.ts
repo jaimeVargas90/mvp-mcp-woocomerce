@@ -17,9 +17,10 @@ const app = express();
 app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
-// ==================================================================
-// Performance Optimization: Client Cache
-// ==================================================================
+/**
+ * Caché en memoria para las configuraciones de clientes.
+ * Se puebla desde la variable de entorno CLIENTS al inicio.
+ */
 let CLIENTS_CACHE: any[] = [];
 
 try {
@@ -38,9 +39,10 @@ try {
   process.exit(1);
 }
 
-// ------------------------------------------------------------------
-// MCP Master Endpoint
-// ------------------------------------------------------------------
+/**
+ * Endpoint Maestro MCP
+ * Maneja las solicitudes entrantes, valida el ID del cliente y enruta a la herramienta adecuada.
+ */
 app.use("/mcp", async (req, res) => {
   console.log(`📨 Incoming MCP Request (${req.method})`);
 
@@ -99,7 +101,10 @@ app.use("/mcp", async (req, res) => {
       consumerSecret: clientData.consumerSecret,
       version: "wc/v3",
       queryStringAuth: true,
-      // Improved Disguise: Headers to simulate a real browser
+      /**
+       * Configuración de "modo sigilo" para evitar errores 403 (WAF).
+       * Simula un User-Agent y cabeceras de navegador real.
+       */
       axiosConfig: {
         headers: {
           // Identidad de navegador estándar
@@ -141,7 +146,6 @@ app.use("/mcp", async (req, res) => {
         if (typeof errorData === 'object') {
           console.error("🔴 Data (JSON):", JSON.stringify(errorData));
         } else {
-          // If HTML (common in WAFs), show a fragment
           console.error("🔴 Data (HTML/Text):", errorData ? errorData.toString().substring(0, 300) : "No data");
         }
       }

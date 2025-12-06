@@ -2,6 +2,9 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
+/**
+ * Herramienta para obtener detalles de un pedido por ID.
+ */
 export const getOrderTool: WooTool = {
     name: "getOrderStatus",
     description: "Obtiene el estado, total, método de envío y notas de un pedido por su ID.",
@@ -20,7 +23,7 @@ export const getOrderTool: WooTool = {
             // Extract shipping method (usually the first one in the array)
             const shippingMethod = order.shipping_lines?.[0]?.method_title || "No especificado";
 
-            // Simplify response for AI
+            // Simplificar respuesta para el contexto de la IA
             const orderInfo = {
                 id: order.id,
                 status: order.status, // e.g., pending, processing, completed, cancelled

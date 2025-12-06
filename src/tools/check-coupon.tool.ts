@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
+/**
+ * Herramienta para verificar la validez de un cupón y obtener sus detalles.
+ */
 export const checkCouponTool: WooTool = {
     name: "checkCoupon",
     description: "Verifica si un código de cupón es válido y devuelve sus detalles, restricciones y descuento.",
@@ -13,7 +16,7 @@ export const checkCouponTool: WooTool = {
         try {
             console.log(`🎟️ Verificando cupón: ${args.code}`);
 
-            // Buscamos el cupón por su código exacto
+            // Buscar el cupón por código exacto
             const response = await api.get("coupons", {
                 code: args.code
             });
@@ -43,7 +46,7 @@ export const checkCouponTool: WooTool = {
                 };
             }
 
-            // 2. Compilar restricciones para que la IA entienda las reglas
+            // 2. Compilar restricciones para el contexto de la IA
             const restrictions: string[] = [];
 
             // Gasto Mínimo/Máximo

@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-// Definimos la estructura que debe tener cualquier Tool de nuestro sistema
+// Define la estructura para cualquier Herramienta (Tool) en el sistema
 export interface WooTool {
   name: string;
   description: string;
   inputSchema: z.ZodType<any>;
-  // El handler recibe la instancia de la API ya autenticada y los argumentos
+  // El handler recibe la instancia de la API autenticada y los argumentos
   handler: (api: any, args: any) => Promise<any>;
 }

@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
+/**
+ * Herramienta para consultar métodos y costos de envío para una ubicación dada.
+ */
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
     description: "Consulta las opciones y costos de envío. Requiere código de país y opcionalmente el estado/provincia.",
@@ -43,8 +46,8 @@ export const getShippingTool: WooTool = {
                         if (loc.type === 'country' && loc.code === country) {
                             return true;
                         }
-                        // C. Continente (menos común)
-                        if (loc.type === 'continent' && loc.code === api.continent_code) { // Requiere que la API exponga continente, si no, ignorar
+                        // C. Continente (si la API lo expone)
+                        if (loc.type === 'continent' && loc.code === api.continent_code) {
                             return false;
                         }
                         return false;

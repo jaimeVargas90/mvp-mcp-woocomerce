@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
+/**
+ * Herramienta maestra para búsqueda y filtrado de productos.
+ */
 export const searchWooProductsTool: WooTool = {
     name: "searchWooProducts",
     description: "Herramienta maestra de productos. Busca por texto, filtra por categoría, precio, ofertas o estado de stock.",
@@ -68,7 +71,7 @@ export const searchWooProductsTool: WooTool = {
             const totalProductsRaw = parseInt(response.headers["x-wp-total"] || "0");
             const totalPages = parseInt(response.headers["x-wp-totalpages"] || "0");
 
-            // 1. Mapeamos los productos tal cual lo hacías
+            // 1. Mapear productos a una estructura más limpia
             let products = response.data.map((p: any) => {
                 const cleanDesc = p.short_description ? p.short_description.replace(/<[^>]*>?/gm, '') : "";
                 const categoryNames = p.categories.map((c: any) => c.name).join(", ");
@@ -93,22 +96,22 @@ export const searchWooProductsTool: WooTool = {
                 };
             });
 
-            // 🔥🔥🔥 AQUI ESTÁ EL FILTRO NUEVO 🔥🔥🔥
-            // Eliminamos "Links de Pago", "Productos de Segunda" y "Sin Categorizar"
+            // Filtro personalizado: Excluir productos irrelevantes
+            // Eliminando "Links de Pago", "Productos de Segunda" y "Sin Categorizar"
             products = products.filter((p: any) => {
                 const nameLower = p.name.toLowerCase();
                 const catsLower = p.categories.toLowerCase();
 
-                // 1. Excluir si el nombre dice "link de pago"
+                // 1. Excluir "link de pago"
                 if (nameLower.includes("link de pago")) return false;
 
-                // 2. Excluir si la categoría es de segunda o basura
+                // 2. Excluir "productos de segunda" o "sin categorizar"
                 if (catsLower.includes("productos de segunda")) return false;
                 if (catsLower.includes("sin categorizar")) return false;
 
-                return true; // Si pasa los filtros, se queda
+                return true;
             });
-            // 🔥🔥🔥 FIN DEL FILTRO 🔥🔥🔥
+            // Fin del filtro personalizado
 
 
             if (products.length === 0) {
@@ -119,7 +122,7 @@ export const searchWooProductsTool: WooTool = {
 
             const resultData = {
                 meta: {
-                    total_results: totalProductsRaw, // Nota: Este número es el total bruto de Woo, no refleja el filtro post-búsqueda, pero está bien para paginación.
+                    total_results: totalProductsRaw, // Nota: Total bruto de Woo, puede diferir tras el filtrado local.
                     current_page: args.page,
                     total_pages: totalPages,
                     showing: products.length,

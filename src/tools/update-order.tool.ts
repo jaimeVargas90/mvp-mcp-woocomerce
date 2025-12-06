@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
+/**
+ * Herramienta para actualizar detalles o estado del pedido.
+ * Puede cancelar pedidos o actualizar información de contacto/envío.
+ */
 export const updateOrderTool: WooTool = {
     name: "updateOrder",
     description: "Herramienta para gestionar pedidos. Permite CANCELAR (status='cancelled') o corregir datos de contacto y envío. NO cambia productos.",
@@ -40,7 +44,7 @@ export const updateOrderTool: WooTool = {
                 };
             }
 
-            // 2. Candado de Seguridad
+            // 2. Candado de seguridad: Evitar editar pedidos completados
             if (currentOrder.status === "completed" || currentOrder.status === "refunded") {
                 return {
                     content: [{ type: "text", text: `🚫 No se puede editar el pedido #${args.orderId} porque ya está '${currentOrder.status}'.` }],
@@ -61,8 +65,8 @@ export const updateOrderTool: WooTool = {
                 ...(newArgs.lastName && { last_name: newArgs.lastName }),
                 ...(newArgs.address && { address_1: newArgs.address }),
                 ...(newArgs.city && { city: newArgs.city }),
-                ...(newArgs.state && { state: newArgs.state }),   // 🔥 Nuevo
-                ...(newArgs.country && { country: newArgs.country }), // 🔥 Nuevo
+                ...(newArgs.state && { state: newArgs.state }),
+                ...(newArgs.country && { country: newArgs.country }),
                 ...(newArgs.email && { email: newArgs.email }),
                 ...(newArgs.phone && { phone: newArgs.phone }),
             });
