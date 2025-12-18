@@ -3,7 +3,7 @@ import { WooTool } from "../types.js";
 
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
-    description: "Consulta costos de envío reales forzando datos técnicos para transportadoras dinámicas.",
+    description: "Calcula fletes reales inyectando datos técnicos y normalizando la ubicación para transportadoras en Colombia.",
 
     inputSchema: z.object({
         productId: z.coerce.number(),
@@ -11,7 +11,6 @@ export const getShippingTool: WooTool = {
         stateCode: z.string(),
         postcode: z.string(),
         countryCode: z.string().default("CO"),
-        // Añadimos estos como opcionales para que la IA los pase si los tiene
         weight: z.string().optional(),
         dimensions: z.object({
             length: z.string(),
@@ -24,15 +23,27 @@ export const getShippingTool: WooTool = {
         try {
             const { productId, city, stateCode, postcode, countryCode, weight, dimensions } = args;
 
-            const formattedState = stateCode.startsWith("CO-") ? stateCode.toUpperCase() : `CO-${stateCode.toUpperCase()}`;
-            const cleanPostcode = postcode.length > 6 ? postcode.substring(0, 6) : postcode;
+            // 1. NORMALIZACIÓN AUTOMÁTICA (Crítico para Coordinadora/QCode)
+            // Convertimos la ciudad a MAYÚSCULAS y quitamos tildes
+            const cleanCity = city.toUpperCase()
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "");
 
-            // 1. SIMULACIÓN DE PEDIDO FORZANDO METADATOS
-            // Al pasar el peso y dimensiones aquí, obligamos al plugin a calcular el flete
+            // Aseguramos el prefijo CO- para el departamento
+            const formattedState = stateCode.toUpperCase().startsWith("CO-")
+                ? stateCode.toUpperCase()
+                : `CO-${stateCode.toUpperCase()}`;
+
+            // Aseguramos que el código postal sea de 6 dígitos
+            const cleanPostcode = postcode.substring(0, 6);
+
+            console.log(`🚀 Enviando a Woo: ${cleanCity}, ${formattedState}, CP: ${cleanPostcode}`);
+
+            // 2. SIMULACIÓN DE PEDIDO CON DATOS TÉCNICOS INYECTADOS
             const orderRes = await api.post("orders", {
                 status: "pending",
                 shipping: {
-                    city: city,
+                    city: cleanCity,
                     state: formattedState,
                     postcode: cleanPostcode,
                     country: countryCode
@@ -41,7 +52,7 @@ export const getShippingTool: WooTool = {
                     {
                         product_id: productId,
                         quantity: 1,
-                        // Forzamos metadatos que el plugin de Coordinadora pueda leer si fallan los del producto
+                        // Inyectamos peso y dimensiones directamente en la línea
                         meta_data: [
                             { key: "_weight", value: weight || "1" },
                             { key: "_length", value: dimensions?.length || "10" },
@@ -58,21 +69,19 @@ export const getShippingTool: WooTool = {
                 cost: parseFloat(m.total) || 0
             }));
 
-            // Borramos el pedido de prueba
+            // Borrado preventivo del pedido temporal
             await api.delete(`orders/${orderData.id}`, { force: true });
 
-            if (availableMethods.length === 0 || (availableMethods.length === 1 && availableMethods[0].cost === 0)) {
-                return {
-                    content: [{ type: "text", text: `Coordinadora no devolvió tarifa. Verifica que el CP ${cleanPostcode} sea servido por la transportadora.` }],
-                };
+            if (availableMethods.length === 0) {
+                return { content: [{ type: "text", text: `Error: No se encontró tarifa para ${cleanCity}. Revisa zonas de envío en Woo.` }] };
             }
 
             return {
-                content: [{ type: "text", text: JSON.stringify({ shipping_options: availableMethods }, null, 2) }],
+                content: [{ type: "text", text: JSON.stringify({ shipping_options: availableMethods }, null, 2) }]
             };
 
         } catch (error: any) {
-            return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
+            return { content: [{ type: "text", text: `Error de API: ${error.message}` }], isError: true };
         }
     },
 };
