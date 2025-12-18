@@ -2,113 +2,82 @@ import { z } from "zod";
 import { WooTool } from "../types.js";
 
 /**
- * Herramienta para consultar métodos y costos de envío para una ubicación dada.
+ * Herramienta para consultar costos de envío reales.
+ * Utiliza la simulación de pedidos para activar cálculos dinámicos (ej: Coordinadora).
  */
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
-    description: "Consulta las opciones y costos de envío. Requiere código de país y opcionalmente el estado/provincia.",
+    description: "Consulta costos de envío reales. Usa simulación de pedido para obtener tarifas dinámicas de transportadoras.",
 
     inputSchema: z.object({
-        countryCode: z.string().length(2).describe("Código ISO del país (ej: 'CO', 'MX', 'US')."),
-        stateCode: z.string().optional().describe("Código del estado/provincia si aplica (ej: 'NY', 'FL', 'ANT')."),
+        productId: z.coerce.number().describe("ID del producto para calcular peso y dimensiones."),
+        city: z.string().describe("Ciudad de destino (ej: 'Medellín')."),
+        stateCode: z.string().describe("Código del estado/provincia (ej: 'ANT', 'DC')."),
+        postcode: z.string().describe("Código postal de 8 dígitos para Colombia (ej: '05001000')."),
+        countryCode: z.string().length(2).default("CO").describe("Código ISO del país (ej: 'CO')."),
     }),
 
     handler: async (api, args) => {
         try {
-            const country = args.countryCode.toUpperCase();
-            const state = args.stateCode ? args.stateCode.toUpperCase() : "";
+            const { productId, city, stateCode, postcode, countryCode } = args;
 
-            console.log(`🚚 Consultando envíos para: ${country} ${state ? `(${state})` : ""}`);
+            console.log(`🚚 Simulando envío para Producto ID ${productId} hacia ${city} (${postcode})...`);
 
-            // 1. Obtener todas las zonas de envío
-            const zonesRes = await api.get("shipping/zones");
-            const zones = zonesRes.data;
-
-            let matchedZoneId = 0; // 0 es la zona "Resto del mundo" por defecto
-
-            // 2. Buscar zona específica
-            // Iteramos sobre las zonas creadas por el usuario (saltando la 0 por ahora)
-            for (const zone of zones) {
-                if (zone.id === 0) continue;
-
-                try {
-                    // Obtenemos las ubicaciones de esta zona
-                    const locationsRes = await api.get(`shipping/zones/${zone.id}/locations`);
-                    const locations = locationsRes.data;
-
-                    // Lógica de coincidencia jerárquica
-                    const match = locations.find((loc: any) => {
-                        // A. Coincidencia exacta de Estado (ej: US:NY)
-                        if (state && loc.type === 'state' && loc.code === `${country}:${state}`) {
-                            return true;
-                        }
-                        // B. Coincidencia de País completo (ej: CO)
-                        if (loc.type === 'country' && loc.code === country) {
-                            return true;
-                        }
-                        // C. Continente (si la API lo expone)
-                        if (loc.type === 'continent' && loc.code === api.continent_code) {
-                            return false;
-                        }
-                        return false;
-                    });
-
-                    if (match) {
-                        matchedZoneId = zone.id;
-                        console.log(`✅ Coincidencia encontrada en Zona ID: ${zone.id} (${zone.name})`);
-                        break; // Dejamos de buscar si encontramos una zona específica
+            // 1. Crear un pedido borrador (draft) para forzar el cálculo de la transportadora
+            // WooCommerce usará internamente el peso y dimensiones del producto
+            const orderRes = await api.post("orders", {
+                status: "pending",
+                billing: {
+                    city: city,
+                    state: stateCode,
+                    postcode: postcode,
+                    country: countryCode
+                },
+                shipping: {
+                    city: city,
+                    state: stateCode,
+                    postcode: postcode,
+                    country: countryCode
+                },
+                line_items: [
+                    {
+                        product_id: productId,
+                        quantity: 1
                     }
-                } catch (e) {
-                    continue;
-                }
+                ]
+            });
+
+            const orderData = orderRes.data;
+            const orderId = orderData.id;
+
+            // 2. Extraer los métodos de envío calculados (incluyendo Coordinadora)
+            const availableMethods = orderData.shipping_lines.map((m: any) => ({
+                method_title: m.method_title,
+                method_id: m.method_id,
+                cost: parseFloat(m.total) || 0,
+                tax: parseFloat(m.total_tax) || 0
+            }));
+
+            // 3. Limpieza: Borrar el pedido temporal inmediatamente
+            try {
+                await api.delete(`orders/${orderId}`, { force: true });
+                console.log(`🗑️ Pedido temporal ${orderId} eliminado.`);
+            } catch (delError: any) {
+                console.warn(`⚠️ No se pudo eliminar el pedido ${orderId}:`, delError.message);
             }
-
-            if (matchedZoneId === 0) {
-                console.log("ℹ️ Usando zona por defecto (Resto del mundo)");
-            }
-
-            // 3. Obtener los métodos de envío de la zona encontrada
-            const methodsRes = await api.get(`shipping/zones/${matchedZoneId}/methods`);
-            const methods = methodsRes.data;
-
-            // 4. Limpiar y formatear respuesta
-            const availableMethods = methods
-                .filter((m: any) => m.enabled) // Solo métodos activos
-                .map((m: any) => {
-                    let cost = "Por calcular";
-
-                    // Intentamos leer el costo (soporta Flat Rate y otros estándares)
-                    if (m.settings?.cost?.value !== undefined) {
-                        cost = m.settings.cost.value;
-                    } else if (m.settings?.cost) {
-                        // A veces viene directo
-                        cost = m.settings.cost;
-                    }
-
-                    if (m.method_id === "free_shipping") {
-                        cost = "0";
-                    }
-
-                    return {
-                        method_title: m.title,
-                        cost: cost,
-                        method_id: m.method_id, // ej: flat_rate
-                        instance_id: m.instance_id // ID único para el pedido
-                    };
-                });
 
             if (availableMethods.length === 0) {
                 return {
-                    content: [{ type: "text", text: `No hay métodos de envío configurados para la ubicación ${country} ${state}.` }],
+                    content: [{ type: "text", text: `WooCommerce no devolvió métodos de envío para esta ubicación. Revisa que el producto tenga peso/dimensiones.` }],
                 };
             }
 
             return {
                 content: [{
                     type: "text", text: JSON.stringify({
-                        location_used: `${country} ${state ? state : '(Todo el país)'}`,
-                        zone_id: matchedZoneId,
-                        methods: availableMethods
+                        location_used: `${city}, ${stateCode} (${postcode})`,
+                        product_id: productId,
+                        shipping_options: availableMethods
                     }, null, 2)
                 }],
             };
