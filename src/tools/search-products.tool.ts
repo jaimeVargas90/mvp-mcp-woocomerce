@@ -86,6 +86,8 @@ export const searchWooProductsTool: WooTool = {
                     on_sale: p.on_sale,
                     categories: categoryNames,
                     image: p.images[0]?.src || null,
+                    weight: p.weight || "0",
+                    dimensions: p.dimensions || { length: "", width: "", height: "" },
                     description: cleanDesc.substring(0, 150) + "...",
                     permalink: p.permalink,
                     attributes: p.attributes.map((attr: any) => ({
