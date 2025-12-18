@@ -40,8 +40,10 @@ export const getShippingTool: WooTool = {
             console.log(`🚀 Enviando a Woo: ${cleanCity}, ${formattedState}, CP: ${cleanPostcode}`);
 
             // 2. SIMULACIÓN DE PEDIDO CON DATOS TÉCNICOS INYECTADOS
+            // ... dentro del handler del MCP
             const orderRes = await api.post("orders", {
                 status: "pending",
+                billing: { /* datos del usuario */ },
                 shipping: {
                     city: cleanCity,
                     state: formattedState,
@@ -52,13 +54,19 @@ export const getShippingTool: WooTool = {
                     {
                         product_id: productId,
                         quantity: 1,
-                        // Inyectamos peso y dimensiones directamente en la línea
                         meta_data: [
                             { key: "_weight", value: weight || "1" },
                             { key: "_length", value: dimensions?.length || "10" },
                             { key: "_width", value: dimensions?.width || "10" },
                             { key: "_height", value: dimensions?.height || "10" }
                         ]
+                    }
+                ],
+                // ESTA ES LA PARTE CLAVE: Forzamos la línea de envío para Coordinadora
+                shipping_lines: [
+                    {
+                        method_id: "coordinadora",
+                        method_title: "Coordinadora"
                     }
                 ]
             });
