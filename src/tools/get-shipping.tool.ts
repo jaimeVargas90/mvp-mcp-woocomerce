@@ -1,45 +1,36 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
-/**
- * Herramienta para consultar costos de envío reales.
- * Utiliza la simulación de pedidos para activar cálculos dinámicos (ej: Coordinadora).
- */
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
-    description: "Consulta costos de envío reales. Usa simulación de pedido para obtener tarifas dinámicas de transportadoras.",
+    description: "Consulta costos de envío reales forzando datos técnicos para transportadoras dinámicas.",
 
     inputSchema: z.object({
-        productId: z.coerce.number().describe("ID del producto para calcular peso y dimensiones."),
-        city: z.string().describe("Ciudad de destino (ej: 'Medellín')."),
-        stateCode: z.string().describe("Código del departamento (ej: 'ANT', 'CO-ANT')."),
-        postcode: z.string().describe("Código postal (ej: '050010' o '05001000')."),
-        countryCode: z.string().length(2).default("CO").describe("Código ISO del país (ej: 'CO')."),
+        productId: z.coerce.number(),
+        city: z.string(),
+        stateCode: z.string(),
+        postcode: z.string(),
+        countryCode: z.string().default("CO"),
+        // Añadimos estos como opcionales para que la IA los pase si los tiene
+        weight: z.string().optional(),
+        dimensions: z.object({
+            length: z.string(),
+            width: z.string(),
+            height: z.string()
+        }).optional()
     }),
 
     handler: async (api, args) => {
         try {
-            const { productId, city, stateCode, postcode, countryCode } = args;
+            const { productId, city, stateCode, postcode, countryCode, weight, dimensions } = args;
 
-            // 1. CORRECCIÓN DE FORMATO: Asegurar que el estado tenga el formato CO-XXX
-            // Los plugins de Colombia requieren el prefijo del país para mapear la zona
             const formattedState = stateCode.startsWith("CO-") ? stateCode.toUpperCase() : `CO-${stateCode.toUpperCase()}`;
-
-            // 2. LIMPIEZA DE POSTCODE: Algunos plugins solo aceptan los primeros 6 dígitos
             const cleanPostcode = postcode.length > 6 ? postcode.substring(0, 6) : postcode;
 
-            console.log(`🚚 Simulando envío para Producto ID ${productId} hacia ${city} (${formattedState}) CP: ${cleanPostcode}...`);
-
-            // 3. Crear un pedido borrador (draft) para forzar el cálculo de la transportadora
-            // WooCommerce usará el peso y dimensiones del producto que ya configuramos en la tool de búsqueda
+            // 1. SIMULACIÓN DE PEDIDO FORZANDO METADATOS
+            // Al pasar el peso y dimensiones aquí, obligamos al plugin a calcular el flete
             const orderRes = await api.post("orders", {
                 status: "pending",
-                billing: {
-                    city: city,
-                    state: formattedState,
-                    postcode: cleanPostcode,
-                    country: countryCode
-                },
                 shipping: {
                     city: city,
                     state: formattedState,
@@ -49,55 +40,39 @@ export const getShippingTool: WooTool = {
                 line_items: [
                     {
                         product_id: productId,
-                        quantity: 1
+                        quantity: 1,
+                        // Forzamos metadatos que el plugin de Coordinadora pueda leer si fallan los del producto
+                        meta_data: [
+                            { key: "_weight", value: weight || "1" },
+                            { key: "_length", value: dimensions?.length || "10" },
+                            { key: "_width", value: dimensions?.width || "10" },
+                            { key: "_height", value: dimensions?.height || "10" }
+                        ]
                     }
                 ]
             });
 
             const orderData = orderRes.data;
-            const orderId = orderData.id;
+            const availableMethods = orderData.shipping_lines.map((m: any) => ({
+                method_title: m.method_title,
+                cost: parseFloat(m.total) || 0
+            }));
 
-            // 4. Extraer los métodos de envío calculados
-            // Aquí es donde aparecerá el costo de Coordinadora si los datos coinciden con la zona
-            const availableMethods = orderData.shipping_lines
-                .filter((m: any) => parseFloat(m.total) >= 0) // Incluye costo 0 si es recogida o gratis
-                .map((m: any) => ({
-                    method_title: m.method_title,
-                    method_id: m.method_id,
-                    cost: parseFloat(m.total) || 0,
-                    tax: parseFloat(m.total_tax) || 0
-                }));
+            // Borramos el pedido de prueba
+            await api.delete(`orders/${orderData.id}`, { force: true });
 
-            // 5. Limpieza: Borrar el pedido temporal inmediatamente para no ensuciar la base de datos
-            try {
-                await api.delete(`orders/${orderId}`, { force: true });
-                console.log(`🗑️ Pedido temporal ${orderId} eliminado exitosamente.`);
-            } catch (delError: any) {
-                console.warn(`⚠️ Error al eliminar pedido temporal ${orderId}:`, delError.message);
-            }
-
-            if (availableMethods.length === 0) {
+            if (availableMethods.length === 0 || (availableMethods.length === 1 && availableMethods[0].cost === 0)) {
                 return {
-                    content: [{ type: "text", text: `No se encontraron métodos de envío disponibles para ${city}, ${formattedState}. Verifica que el método esté activo en WooCommerce para esta zona.` }],
+                    content: [{ type: "text", text: `Coordinadora no devolvió tarifa. Verifica que el CP ${cleanPostcode} sea servido por la transportadora.` }],
                 };
             }
 
             return {
-                content: [{
-                    type: "text", text: JSON.stringify({
-                        location_used: `${city}, ${formattedState} (${cleanPostcode})`,
-                        product_id: productId,
-                        shipping_options: availableMethods
-                    }, null, 2)
-                }],
+                content: [{ type: "text", text: JSON.stringify({ shipping_options: availableMethods }, null, 2) }],
             };
 
         } catch (error: any) {
-            console.error("Error getShippingMethods:", error.message);
-            return {
-                content: [{ type: "text", text: `Error consultando envíos: ${error.message}` }],
-                isError: true,
-            };
+            return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
         }
     },
 };
