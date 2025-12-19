@@ -3,7 +3,7 @@ import { WooTool } from "../types.js";
 
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
-    description: "Calcula fletes reales traduciendo nombres de ciudades a códigos de 8 dígitos para Coordinadora.",
+    description: "Calcula fletes reales traduciendo nombres de ciudades a códigos DANE de 8 dígitos para Coordinadora.",
 
     inputSchema: z.object({
         productId: z.coerce.number(),
@@ -21,30 +21,28 @@ export const getShippingTool: WooTool = {
 
     handler: async (api, args) => {
         try {
-            const { productId, city, stateCode, postcode, countryCode, weight, dimensions } = args;
+            const { productId, city, stateCode, postcode, weight, dimensions } = args;
 
             // 1. DICCIONARIO DE TRADUCCIÓN (Basado en tus registros exitosos)
             const cityMapper: Record<string, string> = {
                 "MEDELLIN": "05001000",
                 "ITAGUI": "05360000",
                 "BOGOTA": "11001000",
-                "CALI": "76001000",
-                "BARRANQUILLA": "08001000"
+                "CALI": "76001000"
             };
 
             const cleanCity = city.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-            // Si la ciudad está en el mapa usamos el código, si no, usamos el postcode original
+            // Si la ciudad está en el mapa usamos el código de 8 dígitos, si no, usamos el postcode original
             const finalCityCode = cityMapper[cleanCity] || postcode;
 
             // 2. SIMULACIÓN DE PEDIDO
             const orderRes = await api.post("orders", {
                 status: "pending",
                 shipping: {
-                    city: finalCityCode, // Forzamos el código numérico
+                    city: finalCityCode, // ENVIAMOS EL CÓDIGO 05001000
                     state: stateCode.includes("-") ? stateCode : `CO-${stateCode.toUpperCase()}`,
                     postcode: finalCityCode,
-                    country: countryCode
+                    country: "CO"
                 },
                 line_items: [{
                     product_id: productId,
@@ -59,18 +57,24 @@ export const getShippingTool: WooTool = {
                 shipping_lines: [{ method_id: "coordinadora", method_title: "Coordinadora" }]
             });
 
-            const shippingMethods = orderRes.data.shipping_lines.map((m: any) => ({
+            const orderData = orderRes.data;
+            const shippingMethods = orderData.shipping_lines.map((m: any) => ({
                 method_title: m.method_title,
                 cost: parseFloat(m.total) || 0
             }));
 
-            await api.delete(`orders/${orderRes.data.id}`, { force: true });
+            await api.delete(`orders/${orderData.id}`, { force: true });
 
             if (shippingMethods.length > 0 && shippingMethods[0].cost > 0) {
-                return { content: [{ type: "text", text: JSON.stringify({ ciudad: cleanCity, tarifa: shippingMethods }, null, 2) }] };
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({ ciudad: cleanCity, tarifa: shippingMethods }, null, 2)
+                    }]
+                };
             }
 
-            return { content: [{ type: "text", text: "Coordinadora no devolvió flete. Verifica el código de ciudad." }] };
+            return { content: [{ type: "text", text: `Coordinadora no devolvió flete para el código ${finalCityCode}.` }] };
 
         } catch (error: any) {
             return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
