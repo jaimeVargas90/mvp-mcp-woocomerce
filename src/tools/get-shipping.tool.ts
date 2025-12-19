@@ -3,7 +3,7 @@ import { WooTool } from "../types.js";
 
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
-    description: "Calcula fletes reales enviando códigos de ciudad de 8 dígitos requeridos por Coordinadora en Colombia.",
+    description: "Calcula fletes reales traduciendo nombres de ciudades a códigos de 8 dígitos para Coordinadora.",
 
     inputSchema: z.object({
         productId: z.coerce.number(),
@@ -23,83 +23,54 @@ export const getShippingTool: WooTool = {
         try {
             const { productId, city, stateCode, postcode, countryCode, weight, dimensions } = args;
 
-            // 1. MAPEADOR DE CIUDADES (Basado en tus registros exitosos de Coordinadora)
-            const cityCodes: Record<string, string> = {
+            // 1. DICCIONARIO DE TRADUCCIÓN (Basado en tus registros exitosos)
+            const cityMapper: Record<string, string> = {
                 "MEDELLIN": "05001000",
                 "ITAGUI": "05360000",
-                "ENVIGADO": "05266000",
                 "BOGOTA": "11001000",
-                "CALI": "76001000"
+                "CALI": "76001000",
+                "BARRANQUILLA": "08001000"
             };
 
-            // Normalizamos el nombre de la ciudad para buscarlo en el mapa
-            const cleanCityName = city.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            const cleanCity = city.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-            // Usamos el código de 8 dígitos si existe, si no, usamos el postcode enviado
-            const finalCityCode = cityCodes[cleanCityName] || postcode;
-            const formattedState = stateCode.toUpperCase().startsWith("CO-") ? stateCode.toUpperCase() : `CO-${stateCode.toUpperCase()}`;
+            // Si la ciudad está en el mapa usamos el código, si no, usamos el postcode original
+            const finalCityCode = cityMapper[cleanCity] || postcode;
 
-            console.log(`🚀 Simulando envío para ${cleanCityName} usando código: ${finalCityCode}`);
-
-            // 2. CREACIÓN DEL PEDIDO SIMULADO (Simulamos el proceso de checkout real)
+            // 2. SIMULACIÓN DE PEDIDO
             const orderRes = await api.post("orders", {
                 status: "pending",
                 shipping: {
-                    city: finalCityCode, // Enviamos el código numérico que Coordinadora exige
-                    state: formattedState,
+                    city: finalCityCode, // Forzamos el código numérico
+                    state: stateCode.includes("-") ? stateCode : `CO-${stateCode.toUpperCase()}`,
                     postcode: finalCityCode,
                     country: countryCode
                 },
-                line_items: [
-                    {
-                        product_id: productId,
-                        quantity: 1,
-                        // Inyección de peso y dimensiones
-                        meta_data: [
-                            { key: "_weight", value: weight || "1" },
-                            { key: "_length", value: dimensions?.length || "10" },
-                            { key: "_width", value: dimensions?.width || "10" },
-                            { key: "_height", value: dimensions?.height || "93" }
-                        ]
-                    }
-                ],
-                // Forzamos la línea de Coordinadora
-                shipping_lines: [
-                    {
-                        method_id: "coordinadora",
-                        method_title: "Coordinadora"
-                    }
-                ]
+                line_items: [{
+                    product_id: productId,
+                    quantity: 1,
+                    meta_data: [
+                        { key: "_weight", value: weight || "1" },
+                        { key: "_length", value: dimensions?.length || "10" },
+                        { key: "_width", value: dimensions?.width || "10" },
+                        { key: "_height", value: dimensions?.height || "93" }
+                    ]
+                }],
+                shipping_lines: [{ method_id: "coordinadora", method_title: "Coordinadora" }]
             });
 
-            const orderData = orderRes.data;
-            const orderId = orderData.id;
-
-            // 3. EXTRACCIÓN DEL RESULTADO
-            const shippingMethods = orderData.shipping_lines.map((m: any) => ({
+            const shippingMethods = orderRes.data.shipping_lines.map((m: any) => ({
                 method_title: m.method_title,
                 cost: parseFloat(m.total) || 0
             }));
 
-            // Borrado del pedido temporal
-            await api.delete(`orders/${orderId}`, { force: true });
+            await api.delete(`orders/${orderRes.data.id}`, { force: true });
 
             if (shippingMethods.length > 0 && shippingMethods[0].cost > 0) {
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({
-                            destinatario: cleanCityName,
-                            codigo_ciudad: finalCityCode,
-                            opciones: shippingMethods
-                        }, null, 2)
-                    }]
-                };
+                return { content: [{ type: "text", text: JSON.stringify({ ciudad: cleanCity, tarifa: shippingMethods }, null, 2) }] };
             }
 
-            return {
-                content: [{ type: "text", text: `Coordinadora no devolvió tarifa para ${cleanCityName}. Verifica que el código postal o código de ciudad ${finalCityCode} sea correcto.` }]
-            };
+            return { content: [{ type: "text", text: "Coordinadora no devolvió flete. Verifica el código de ciudad." }] };
 
         } catch (error: any) {
             return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
