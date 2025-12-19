@@ -3,7 +3,7 @@ import { WooTool } from "../types.js";
 
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
-    description: "Calcula fletes reales inyectando datos técnicos y normalizando la ubicación para transportadoras en Colombia.",
+    description: "Calcula fletes reales forzando la consulta al plugin de Coordinadora.",
 
     inputSchema: z.object({
         productId: z.coerce.number(),
@@ -23,37 +23,24 @@ export const getShippingTool: WooTool = {
         try {
             const { productId, city, stateCode, postcode, countryCode, weight, dimensions } = args;
 
-            // 1. NORMALIZACIÓN AUTOMÁTICA (Crítico para Coordinadora/QCode)
-            // Convertimos la ciudad a MAYÚSCULAS y quitamos tildes
-            const cleanCity = city.toUpperCase()
-                .normalize("NFD")
-                .replace(/[\u0300-\u036f]/g, "");
+            // Normalización obligatoria para transportadoras colombianas
+            const cleanCity = city.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            const formattedState = stateCode.toUpperCase().startsWith("CO-") ? stateCode.toUpperCase() : `CO-${stateCode.toUpperCase()}`;
 
-            // Aseguramos el prefijo CO- para el departamento
-            const formattedState = stateCode.toUpperCase().startsWith("CO-")
-                ? stateCode.toUpperCase()
-                : `CO-${stateCode.toUpperCase()}`;
-
-            // Aseguramos que el código postal sea de 6 dígitos
-            const cleanPostcode = postcode.substring(0, 6);
-
-            console.log(`🚀 Enviando a Woo: ${cleanCity}, ${formattedState}, CP: ${cleanPostcode}`);
-
-            // 2. SIMULACIÓN DE PEDIDO CON DATOS TÉCNICOS INYECTADOS
-            // ... dentro del handler del MCP
+            // 1. SIMULACIÓN DE PEDIDO CON LÍNEA DE ENVÍO FORZADA
             const orderRes = await api.post("orders", {
                 status: "pending",
-                billing: { /* datos del usuario */ },
                 shipping: {
                     city: cleanCity,
                     state: formattedState,
-                    postcode: cleanPostcode,
+                    postcode: postcode,
                     country: countryCode
                 },
                 line_items: [
                     {
                         product_id: productId,
                         quantity: 1,
+                        // Inyección de metadatos técnicos
                         meta_data: [
                             { key: "_weight", value: weight || "1" },
                             { key: "_length", value: dimensions?.length || "10" },
@@ -62,7 +49,7 @@ export const getShippingTool: WooTool = {
                         ]
                     }
                 ],
-                // ESTA ES LA PARTE CLAVE: Forzamos la línea de envío para Coordinadora
+                // FORZAMOS LA LÍNEA DE COORDINADORA
                 shipping_lines: [
                     {
                         method_id: "coordinadora",
@@ -71,25 +58,29 @@ export const getShippingTool: WooTool = {
                 ]
             });
 
+            // 2. Extraer el costo calculado por el plugin
             const orderData = orderRes.data;
-            const availableMethods = orderData.shipping_lines.map((m: any) => ({
+            const shippingMethods = orderData.shipping_lines.map((m: any) => ({
                 method_title: m.method_title,
                 cost: parseFloat(m.total) || 0
             }));
 
-            // Borrado preventivo del pedido temporal
+            // Borrado del pedido temporal
             await api.delete(`orders/${orderData.id}`, { force: true });
 
-            if (availableMethods.length === 0) {
-                return { content: [{ type: "text", text: `Error: No se encontró tarifa para ${cleanCity}. Revisa zonas de envío en Woo.` }] };
+            // Si el costo es 0 y no es un método gratuito, algo falló en la comunicación con la transportadora
+            if (shippingMethods.length > 0 && shippingMethods[0].cost > 0) {
+                return {
+                    content: [{ type: "text", text: JSON.stringify({ shipping_options: shippingMethods }, null, 2) }]
+                };
             }
 
             return {
-                content: [{ type: "text", text: JSON.stringify({ shipping_options: availableMethods }, null, 2) }]
+                content: [{ type: "text", text: `No se pudo obtener una tarifa válida de Coordinadora para ${cleanCity}. Revisa la conexión del plugin.` }]
             };
 
         } catch (error: any) {
-            return { content: [{ type: "text", text: `Error de API: ${error.message}` }], isError: true };
+            return { content: [{ type: "text", text: `Error de conexión: ${error.message}` }], isError: true };
         }
     },
 };
