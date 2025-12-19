@@ -41,6 +41,7 @@ export const getShippingTool: WooTool = {
                     {
                         product_id: productId,
                         quantity: 1,
+                        // Forzamos los metadatos de peso y dimensiones directamente
                         meta_data: [
                             { key: "_weight", value: weight || "1" },
                             { key: "_length", value: dimensions?.length || "10" },
@@ -52,7 +53,7 @@ export const getShippingTool: WooTool = {
                 // FORZADO DE LÍNEA DE ENVÍO
                 shipping_lines: [
                     {
-                        method_id: "coordinadora_shipping_method", // Cambiamos de 'coordinadora' a este ID más específico
+                        method_id: "coordinadora", // ID técnico que usa el plugin
                         method_title: "Coordinadora"
                     }
                 ]
