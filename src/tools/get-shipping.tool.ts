@@ -52,7 +52,7 @@ export const getShippingTool: WooTool = {
                 // FORZADO DE LÍNEA DE ENVÍO
                 shipping_lines: [
                     {
-                        method_id: "coordinadora",
+                        method_id: "coordinadora_shipping_method", // Cambiamos de 'coordinadora' a este ID más específico
                         method_title: "Coordinadora"
                     }
                 ]
