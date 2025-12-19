@@ -1,10 +1,6 @@
 import { z } from "zod";
 import { WooTool } from "../types.js";
 
-/**
- * Herramienta para consultar costos de envío reales.
- * Fuerza la detección de Coordinadora inyectando datos técnicos y normalizando ubicación.
- */
 export const getShippingTool: WooTool = {
     name: "getShippingMethods",
     description: "Calcula fletes reales inyectando datos técnicos y normalizando la ubicación para transportadoras en Colombia.",
@@ -27,15 +23,13 @@ export const getShippingTool: WooTool = {
         try {
             const { productId, city, stateCode, postcode, countryCode, weight, dimensions } = args;
 
-            // 1. NORMALIZACIÓN GEOGRÁFICA (Crítico para que el plugin encuentre la tarifa)
+            // 1. NORMALIZACIÓN GEOGRÁFICA
             const cleanCity = city.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
             const formattedState = stateCode.toUpperCase().startsWith("CO-") ? stateCode.toUpperCase() : `CO-${stateCode.toUpperCase()}`;
 
-            console.log(`🚚 Iniciando simulación para ${cleanCity} (${formattedState}) con ID ${productId}`);
-
-            // 2. CREACIÓN DEL PEDIDO SIMULADO INYECTANDO METADATOS TÉCNICOS
-            // Inyectamos _weight y dimensiones para que el plugin de Coordinadora tenga qué calcular
-            let orderRes = await api.post("orders", {
+            // 2. CREACIÓN DEL PEDIDO SIMULADO CON LÍNEA DE ENVÍO FORZADA
+            // Forzamos el ID técnico 'coordinadora' para que el plugin se vea obligado a procesar el pedido
+            const orderRes = await api.post("orders", {
                 status: "pending",
                 shipping: {
                     city: cleanCity,
@@ -54,34 +48,26 @@ export const getShippingTool: WooTool = {
                             { key: "_height", value: dimensions?.height || "93" }
                         ]
                     }
+                ],
+                // FORZADO DE LÍNEA DE ENVÍO
+                shipping_lines: [
+                    {
+                        method_id: "coordinadora",
+                        method_title: "Coordinadora"
+                    }
                 ]
             });
 
-            let orderData = orderRes.data;
+            const orderData = orderRes.data;
             const orderId = orderData.id;
 
-            // 3. INTENTO DE FORZAR COORDINADORA SI NO APARECE AUTOMÁTICAMENTE
-            // Si la respuesta inicial no trae métodos, intentamos forzar el ID técnico
-            if (orderData.shipping_lines.length === 0) {
-                console.log("⚠️ No se detectó método automático, intentando forzar ID técnico...");
-                const updateRes = await api.put(`orders/${orderId}`, {
-                    shipping_lines: [
-                        {
-                            method_id: "coordinadora", // ID estándar
-                            method_title: "Coordinadora"
-                        }
-                    ]
-                });
-                orderData = updateRes.data;
-            }
-
-            // 4. PROCESAMIENTO DE RESULTADOS
+            // 3. PROCESAMIENTO DE RESULTADOS
             const shippingMethods = orderData.shipping_lines.map((m: any) => ({
                 method_title: m.method_title,
                 cost: parseFloat(m.total) || 0
             }));
 
-            // 5. LIMPIEZA: Borrar pedido temporal
+            // 4. LIMPIEZA: Borrar pedido temporal
             await api.delete(`orders/${orderId}`, { force: true });
 
             if (shippingMethods.length > 0 && shippingMethods[0].cost > 0) {
@@ -99,12 +85,11 @@ export const getShippingTool: WooTool = {
             return {
                 content: [{
                     type: "text",
-                    text: `No se pudo obtener una tarifa de Coordinadora. Verifica que el CP ${postcode} sea servido y que el plugin no tenga restricciones de peso.`
+                    text: `No se encontró tarifa dinámica. Revisa que el plugin de Coordinadora esté configurado para permitir consultas vía API en sus ajustes internos.`
                 }]
             };
 
         } catch (error: any) {
-            console.error("Error en getShippingMethods:", error.message);
             return {
                 content: [{ type: "text", text: `Error de API: ${error.message}` }],
                 isError: true
